@@ -1,0 +1,364 @@
+import {
+  pgTable,
+  text,
+  varchar,
+  timestamp,
+  jsonb,
+  index,
+  serial,
+  decimal,
+  boolean,
+  integer,
+} from "drizzle-orm/pg-core";
+import { relations } from "drizzle-orm";
+import { createInsertSchema } from "drizzle-zod";
+import { z } from "zod";
+
+// Session storage table (required for Replit Auth)
+export const sessions = pgTable(
+  "sessions",
+  {
+    sid: varchar("sid").primaryKey(),
+    sess: jsonb("sess").notNull(),
+    expire: timestamp("expire").notNull(),
+  },
+  (table) => [index("IDX_session_expire").on(table.expire)],
+);
+
+// User storage table (required for Replit Auth)
+export const users = pgTable("users", {
+  id: varchar("id").primaryKey().notNull(),
+  email: varchar("email").unique(),
+  firstName: varchar("first_name"),
+  lastName: varchar("last_name"),
+  profileImageUrl: varchar("profile_image_url"),
+  role: varchar("role").notNull().default("visitante"), // "administrador", "editor", "visitante"
+  passwordHash: varchar("password_hash"), // Para usuários criados manualmente
+  lastLogin: timestamp("last_login"),
+  createdAt: timestamp("created_at").defaultNow(),
+  updatedAt: timestamp("updated_at").defaultNow(),
+});
+
+// Categories table
+export const categories = pgTable("categories", {
+  id: serial("id").primaryKey(),
+  name: varchar("name", { length: 255 }).notNull(),
+  description: text("description"),
+  createdAt: timestamp("created_at").defaultNow(),
+  updatedAt: timestamp("updated_at").defaultNow(),
+});
+
+// Clients table
+export const clients = pgTable("clients", {
+  id: serial("id").primaryKey(),
+  name: varchar("name", { length: 255 }).notNull(),
+  email: varchar("email", { length: 255 }),
+  phone: varchar("phone", { length: 50 }),
+  status: varchar("status", { length: 20 }).notNull().default("active"),
+  apiKey: varchar("api_key", { length: 255 }),
+  isMaster: boolean("is_master").notNull().default(false), // Marca o cliente master (dono dos produtos)
+  createdAt: timestamp("created_at").defaultNow(),
+  updatedAt: timestamp("updated_at").defaultNow(),
+});
+
+// Competitors table
+export const competitors = pgTable("competitors", {
+  id: serial("id").primaryKey(),
+  name: varchar("name", { length: 255 }).notNull(),
+  website: varchar("website", { length: 500 }),
+  description: text("description"),
+  marketPosition: varchar("market_position", { length: 50 }), // premium, mid-market, budget
+  createdAt: timestamp("created_at").defaultNow(),
+  updatedAt: timestamp("updated_at").defaultNow(),
+});
+
+// Products table
+export const products = pgTable("products", {
+  id: serial("id").primaryKey(),
+  sku: varchar("sku", { length: 100 }).notNull().unique(),
+  name: varchar("name", { length: 255 }).notNull(),
+  description: text("description"),
+  manufacturer: text("manufacturer"), // Novo campo para marca/fabricante
+  categoryId: integer("category_id").references(() => categories.id),
+  clientId: integer("client_id").references(() => clients.id), // Cliente associado ao produto
+  competitorId: integer("competitor_id").references(() => competitors.id), // Concorrente associado ao produto
+  isCompetitor: boolean("is_competitor").notNull().default(false), // Checkbox para concorrente
+  sourceType: varchar("source_type", { length: 20 }).notNull().default("client"), // "client" ou "competitor"
+  basePrice: decimal("base_price", { precision: 10, scale: 2 }).notNull(),
+  imageUrl: varchar("image_url", { length: 500 }),
+  status: varchar("status", { length: 20 }).notNull().default("active"),
+  matchGroup: varchar("match_group", { length: 100 }), // Grupo de produtos equivalentes
+  brandSku: varchar("brand_sku", { length: 100 }), // SKU da sua marca
+  sourceUrl: varchar("source_url", { length: 1000 }), // URL de origem do produto
+  isMaster: boolean("is_master").notNull().default(false), // Produto master ou de monitoramento
+  masterProductId: integer("master_product_id").references((): any => products.id), // Referência ao produto master
+  createdAt: timestamp("created_at").defaultNow(),
+  updatedAt: timestamp("updated_at").defaultNow(),
+});
+
+// Prices table
+export const prices = pgTable("prices", {
+  id: serial("id").primaryKey(),
+  productId: integer("product_id").references(() => products.id),
+  clientId: integer("client_id").references(() => clients.id),
+  competitorId: integer("competitor_id").references(() => competitors.id),
+  sourceType: varchar("source_type", { length: 20 }).notNull().default("client"), // "client" ou "competitor"
+  price: decimal("price", { precision: 10, scale: 2 }).notNull(),
+  discount: decimal("discount", { precision: 5, scale: 2 }).default("0"),
+  isAvailable: boolean("is_available").default(true),
+  lastUpdated: timestamp("last_updated").defaultNow(),
+  createdAt: timestamp("created_at").defaultNow(),
+  updatedAt: timestamp("updated_at").defaultNow(),
+});
+
+// Upload history table
+export const uploadHistory = pgTable("upload_history", {
+  id: serial("id").primaryKey(),
+  filename: varchar("filename", { length: 255 }).notNull(),
+  recordsProcessed: integer("records_processed").notNull(),
+  recordsSuccess: integer("records_success").notNull(),
+  recordsError: integer("records_error").notNull(),
+  status: varchar("status", { length: 20 }).notNull(),
+  errorDetails: jsonb("error_details"),
+  userId: varchar("user_id").references(() => users.id),
+  createdAt: timestamp("created_at").defaultNow(),
+});
+
+// API Keys table
+export const apiKeys = pgTable("api_keys", {
+  id: serial("id").primaryKey(),
+  name: varchar("name", { length: 255 }).notNull(),
+  keyHash: varchar("key_hash", { length: 255 }).notNull().unique(),
+  userId: varchar("user_id").references(() => users.id),
+  lastUsed: timestamp("last_used"),
+  isActive: boolean("is_active").default(true),
+  createdAt: timestamp("created_at").defaultNow(),
+});
+
+// Price History table
+export const priceHistory = pgTable("price_history", {
+  id: serial("id").primaryKey(),
+  productId: integer("product_id").notNull().references(() => products.id, { onDelete: "cascade" }),
+  clientId: integer("client_id").notNull().references(() => clients.id, { onDelete: "cascade" }),
+  oldPrice: decimal("old_price", { precision: 10, scale: 2 }),
+  newPrice: decimal("new_price", { precision: 10, scale: 2 }).notNull(),
+  changeReason: text("change_reason"),
+  createdAt: timestamp("created_at").defaultNow(),
+  updatedAt: timestamp("updated_at").defaultNow(),
+});
+
+// Price Monitoring History table
+export const priceMonitoringHistory = pgTable("price_monitoring_history", {
+  id: serial("id").primaryKey(),
+  productId: integer("product_id").notNull().references(() => products.id, { onDelete: "cascade" }),
+  priceOld: decimal("price_old", { precision: 10, scale: 2 }),
+  priceNew: decimal("price_new", { precision: 10, scale: 2 }).notNull(),
+  dateChecked: timestamp("date_checked").defaultNow().notNull(),
+  source: text("source").default("url_monitoring"),
+  createdAt: timestamp("created_at").defaultNow().notNull(),
+});
+
+// Reports History table
+export const reportsHistory = pgTable("reports_history", {
+  id: serial("id").primaryKey(),
+  reportType: varchar("report_type", { length: 100 }).notNull(), // "price-comparison", "savings-analysis", etc.
+  reportTitle: varchar("report_title", { length: 255 }).notNull(),
+  generatedBy: varchar("generated_by").notNull().references(() => users.id),
+  parameters: jsonb("parameters"), // Filtros e parâmetros usados
+  recordCount: integer("record_count").default(0), // Quantidade de registros no relatório
+  fileFormat: varchar("file_format", { length: 20 }).default("json"), // "json", "excel", "pdf"
+  filePath: varchar("file_path", { length: 500 }), // Caminho do arquivo gerado (se aplicável)
+  generatedAt: timestamp("generated_at").defaultNow().notNull(),
+  createdAt: timestamp("created_at").defaultNow(),
+});
+
+// Relations
+export const categoriesRelations = relations(categories, ({ many }) => ({
+  products: many(products),
+}));
+
+export const productsRelations = relations(products, ({ one, many }) => ({
+  category: one(categories, {
+    fields: [products.categoryId],
+    references: [categories.id],
+  }),
+  client: one(clients, {
+    fields: [products.clientId],
+    references: [clients.id],
+  }),
+  competitor: one(competitors, {
+    fields: [products.competitorId],
+    references: [competitors.id],
+  }),
+  prices: many(prices),
+  priceHistory: many(priceHistory),
+  priceMonitoringHistory: many(priceMonitoringHistory),
+}));
+
+export const clientsRelations = relations(clients, ({ many }) => ({
+  products: many(products),
+  prices: many(prices),
+  apiKeys: many(apiKeys),
+}));
+
+export const competitorsRelations = relations(competitors, ({ many }) => ({
+  products: many(products),
+  prices: many(prices),
+}));
+
+export const pricesRelations = relations(prices, ({ one }) => ({
+  product: one(products, {
+    fields: [prices.productId],
+    references: [products.id],
+  }),
+  client: one(clients, {
+    fields: [prices.clientId],
+    references: [clients.id],
+  }),
+  competitor: one(competitors, {
+    fields: [prices.competitorId],
+    references: [competitors.id],
+  }),
+}));
+
+export const usersRelations = relations(users, ({ many }) => ({
+  uploadHistory: many(uploadHistory),
+  apiKeys: many(apiKeys),
+  reportsHistory: many(reportsHistory),
+}));
+
+export const uploadHistoryRelations = relations(uploadHistory, ({ one }) => ({
+  user: one(users, {
+    fields: [uploadHistory.userId],
+    references: [users.id],
+  }),
+}));
+
+export const apiKeysRelations = relations(apiKeys, ({ one }) => ({
+  user: one(users, {
+    fields: [apiKeys.userId],
+    references: [users.id],
+  }),
+}));
+
+export const priceHistoryRelations = relations(priceHistory, ({ one }) => ({
+  product: one(products, {
+    fields: [priceHistory.productId],
+    references: [products.id],
+  }),
+  client: one(clients, {
+    fields: [priceHistory.clientId],
+    references: [clients.id],
+  }),
+}));
+
+export const priceMonitoringHistoryRelations = relations(priceMonitoringHistory, ({ one }) => ({
+  product: one(products, {
+    fields: [priceMonitoringHistory.productId],
+    references: [products.id],
+  }),
+}));
+
+export const reportsHistoryRelations = relations(reportsHistory, ({ one }) => ({
+  user: one(users, {
+    fields: [reportsHistory.generatedBy],
+    references: [users.id],
+  }),
+}));
+
+// Insert schemas
+export const insertCategorySchema = createInsertSchema(categories).omit({
+  id: true,
+  createdAt: true,
+  updatedAt: true,
+});
+
+export const insertClientSchema = createInsertSchema(clients).omit({
+  id: true,
+  createdAt: true,
+  updatedAt: true,
+  apiKey: true,
+});
+
+export const insertCompetitorSchema = createInsertSchema(competitors).omit({
+  id: true,
+  createdAt: true,
+  updatedAt: true,
+});
+
+export const insertProductSchema = createInsertSchema(products).omit({
+  id: true,
+  createdAt: true,
+  updatedAt: true,
+}).extend({
+  manufacturer: z.string().optional(),
+  categoryId: z.number().nullable().optional(),
+  clientId: z.number().nullable().optional(),
+  competitorId: z.number().nullable().optional(),
+  isCompetitor: z.boolean().default(false),
+  basePrice: z.string().min(1, "Preço base é obrigatório"),
+  sourceType: z.enum(["client", "competitor"]).default("client"),
+});
+
+export const insertPriceSchema = createInsertSchema(prices).omit({
+  id: true,
+  createdAt: true,
+  lastUpdated: true,
+}).extend({
+  price: z.string().min(1, "Preço é obrigatório"),
+  sourceType: z.enum(["client", "competitor"]).default("client"),
+});
+
+export const insertUploadHistorySchema = createInsertSchema(uploadHistory).omit({
+  id: true,
+  createdAt: true,
+});
+
+export const insertApiKeySchema = createInsertSchema(apiKeys).omit({
+  id: true,
+  createdAt: true,
+  lastUsed: true,
+  keyHash: true,
+});
+
+export const insertPriceHistorySchema = createInsertSchema(priceHistory).omit({
+  id: true,
+  createdAt: true,
+  updatedAt: true,
+});
+
+export const insertPriceMonitoringHistorySchema = createInsertSchema(priceMonitoringHistory).omit({
+  id: true,
+  createdAt: true,
+});
+
+export const insertReportsHistorySchema = createInsertSchema(reportsHistory).omit({
+  id: true,
+  generatedAt: true,
+  createdAt: true,
+});
+
+// Types
+export type UpsertUser = typeof users.$inferInsert;
+export type User = typeof users.$inferSelect;
+export type InsertCategory = z.infer<typeof insertCategorySchema>;
+export type Category = typeof categories.$inferSelect;
+export type InsertClient = z.infer<typeof insertClientSchema>;
+export type Client = typeof clients.$inferSelect;
+
+export type InsertCompetitor = z.infer<typeof insertCompetitorSchema>;
+export type Competitor = typeof competitors.$inferSelect;
+export type InsertProduct = z.infer<typeof insertProductSchema>;
+export type Product = typeof products.$inferSelect;
+export type InsertPrice = z.infer<typeof insertPriceSchema>;
+export type Price = typeof prices.$inferSelect;
+export type InsertUploadHistory = z.infer<typeof insertUploadHistorySchema>;
+export type UploadHistory = typeof uploadHistory.$inferSelect;
+export type InsertApiKey = z.infer<typeof insertApiKeySchema>;
+export type ApiKey = typeof apiKeys.$inferSelect;
+export type InsertPriceHistory = z.infer<typeof insertPriceHistorySchema>;
+export type PriceHistory = typeof priceHistory.$inferSelect;
+export type InsertPriceMonitoringHistory = z.infer<typeof insertPriceMonitoringHistorySchema>;
+export type PriceMonitoringHistory = typeof priceMonitoringHistory.$inferSelect;
+export type InsertReportsHistory = z.infer<typeof insertReportsHistorySchema>;
+export type ReportsHistory = typeof reportsHistory.$inferSelect;

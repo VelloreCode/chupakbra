@@ -1,0 +1,30 @@
+node_modules
+dist
+.DS_Store
+server/public
+vite.config.ts.*
+*.tar.gzdatabase_export.json
+.env
+.env.*
+!.env.example
+.local
+.config
+.agents
+
+# Database dumps / exports (contain real business data — do not version)
+database_data.sql
+database_export_complete.json
+database_full_backup.sql
+database_schema.sql
+
+# Local session/cookie files (contain real session tokens)
+cookies.txt
+test_cookies.txt
+fresh_session.txt
+working_session.txt
+
+# Local scraper/report output
+reports/
+
+# Claude Code local settings
+.claude/settings.local.json

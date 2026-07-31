@@ -1,0 +1,17 @@
+node_modules
+dist
+.git
+.local
+.config
+reports
+database_data.sql
+database_export_complete.json
+database_full_backup.sql
+database_schema.sql
+cookies.txt
+test_cookies.txt
+fresh_session.txt
+working_session.txt
+.env
+.env.*
+*.log
