@@ -1,7 +1,7 @@
 // Database connection established securely
 import express, { type Request, Response, NextFunction } from "express";
 import { registerRoutes } from "./routes";
-import { setupVite, serveStatic, log } from "./vite";
+import { serveStatic, log } from "./static";
 import { startCronJobs } from "./cron";
 import { getScrapingQueue } from "./scraping-queue";
 
@@ -54,6 +54,8 @@ app.use((req, res, next) => {
   // setting up all the other routes so the catch-all route
   // doesn't interfere with the other routes
   if (app.get("env") === "development") {
+    // import dinâmico: ./vite depende de devDependencies ausentes em produção
+    const { setupVite } = await import("./vite");
     await setupVite(app, server);
   } else {
     serveStatic(app);
@@ -74,10 +76,11 @@ app.use((req, res, next) => {
   // Porta do servidor — serve tanto a API quanto o client.
   // Branch de teste: 5003 por padrão. Pode ser sobrescrita via PORT.
   const port = Number(process.env.PORT) || 5003;
+  // sem reusePort: só faz sentido com múltiplos processos no mesmo host e
+  // quebra em plataformas sem SO_REUSEPORT (Windows) a partir do Node 22
   server.listen({
     port,
     host: "0.0.0.0",
-    reusePort: true,
   }, () => {
     log(`serving on port ${port}`);
   });
