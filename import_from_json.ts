@@ -47,14 +47,24 @@ async function importFromJson() {
   // Carregar dados
   console.log('1. Carregando dados do JSON...');
   const rawData = fs.readFileSync('database_export_complete.json', 'utf-8');
-  const data: ExportData = JSON.parse(rawData);
+  const isoDateRegex = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(\.\d+)?Z$/;
+  const data: ExportData = JSON.parse(rawData, (_key, value) =>
+    typeof value === 'string' && isoDateRegex.test(value) ? new Date(value) : value
+  );
   console.log(`   Data do export: ${data.exportDate}\n`);
 
   try {
-    // Desabilitar FK checks temporariamente
+    // Desabilitar FK checks temporariamente (requer superusuário; alguns
+    // provedores gerenciados, como o Postgres do Dokploy, não concedem essa
+    // permissão ao usuário da aplicação — nesse caso seguimos sem desabilitar,
+    // já que a importação abaixo respeita a ordem de dependência das FKs)
     console.log('2. Preparando banco de dados...');
-    await db.execute(sql`SET session_replication_role = 'replica'`);
-    console.log('   ✓ Constraints desabilitadas temporariamente\n');
+    try {
+      await db.execute(sql`SET session_replication_role = 'replica'`);
+      console.log('   ✓ Constraints desabilitadas temporariamente\n');
+    } catch (e) {
+      console.log('   AVISO: sem permissão para desabilitar constraints, seguindo com a ordem de FKs\n');
+    }
 
     // Importar na ordem correta (respeitando FKs)
     console.log('3. Importando dados...\n');
@@ -66,7 +76,7 @@ async function importFromJson() {
         try {
           await db.insert(users).values(user).onConflictDoNothing();
         } catch (e) {
-          console.log(`   AVISO: Erro ao inserir user ${user.id}`);
+          console.log(`   AVISO: Erro ao inserir user ${user.id}: ${(e as Error).message}`);
         }
       }
       console.log('   ✓ Users importados');
@@ -79,7 +89,7 @@ async function importFromJson() {
         try {
           await db.insert(categories).values(category).onConflictDoNothing();
         } catch (e) {
-          console.log(`   AVISO: Erro ao inserir category ${category.id}`);
+          console.log(`   AVISO: Erro ao inserir category ${category.id}: ${(e as Error).message}`);
         }
       }
       console.log('   ✓ Categories importadas');
@@ -92,7 +102,7 @@ async function importFromJson() {
         try {
           await db.insert(clients).values(client).onConflictDoNothing();
         } catch (e) {
-          console.log(`   AVISO: Erro ao inserir client ${client.id}`);
+          console.log(`   AVISO: Erro ao inserir client ${client.id}: ${(e as Error).message}`);
         }
       }
       console.log('   ✓ Clients importados');
@@ -105,7 +115,7 @@ async function importFromJson() {
         try {
           await db.insert(competitors).values(competitor).onConflictDoNothing();
         } catch (e) {
-          console.log(`   AVISO: Erro ao inserir competitor ${competitor.id}`);
+          console.log(`   AVISO: Erro ao inserir competitor ${competitor.id}: ${(e as Error).message}`);
         }
       }
       console.log('   ✓ Competitors importados');
@@ -220,8 +230,12 @@ async function importFromJson() {
 
     // Reabilitar FK checks
     console.log('\n4. Finalizando...');
-    await db.execute(sql`SET session_replication_role = 'origin'`);
-    console.log('   ✓ Constraints reabilitadas\n');
+    try {
+      await db.execute(sql`SET session_replication_role = 'origin'`);
+      console.log('   ✓ Constraints reabilitadas\n');
+    } catch (e) {
+      // Não foi desabilitado acima por falta de permissão, nada a reverter
+    }
 
     // Verificar contagem
     console.log('5. Verificando importação...\n');
@@ -247,8 +261,12 @@ async function importFromJson() {
 
   } catch (error) {
     console.error('ERRO durante importação:', error);
-    // Reabilitar constraints em caso de erro
-    await db.execute(sql`SET session_replication_role = 'origin'`);
+    // Reabilitar constraints em caso de erro (se aplicável)
+    try {
+      await db.execute(sql`SET session_replication_role = 'origin'`);
+    } catch (e) {
+      // sem permissão / não estava desabilitado
+    }
     process.exit(1);
   }
 
