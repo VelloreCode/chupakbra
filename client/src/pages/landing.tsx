@@ -15,7 +15,7 @@ export default function LandingPage() {
         <div className="flex justify-end gap-4">
           <Button 
             onClick={() => setIsWizardOpen(true)}
-            className="bg-green-600 hover:bg-green-700 text-white shadow-lg"
+            className="bg-blue-600 hover:bg-blue-700 text-white shadow-lg"
             size="lg"
           >
             <Play className="h-5 w-5 mr-2" />
