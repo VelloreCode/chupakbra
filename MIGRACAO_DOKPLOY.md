@@ -106,9 +106,9 @@ Se preferir migrar de dentro do próprio servidor (sem baixar/subir 2MB de dump 
 
 1. **Projeto → Create Application**.
 2. **Source**: Git Provider → GitHub, autenticando via SSH. O Dokploy vai gerar (ou permitir colar) uma chave SSH pública — copie ela e cadastre como **Deploy Key** no repositório GitHub (Settings → Deploy keys), como na Parte 1.
-3. **Repositório**: `hitkoch/Chupakbravellore`, branch `main`.
+3. **Repositório**: `VelloreCode/chupakbra`, branch `Teste` (ambiente de teste; a branch `main` é a de produção).
 4. **Build type**: Dockerfile (o `Dockerfile` que criei na raiz do projeto já faz `npm ci` + `npm run build` + `node dist/index.js`).
-5. **Porta interna**: `5000` (é a porta que o Express escuta — já configurada no `Dockerfile` com `EXPOSE 5000`).
+5. **Porta interna**: `5003` (é a porta que o Express escuta nesta branch — já configurada no `Dockerfile` com `EXPOSE 5003`). Pode ser sobrescrita pela variável `PORT`.
 6. **Variáveis de ambiente** (Environment): copie o conteúdo de `.env.example` e preencha com os valores reais:
    - `DATABASE_URL` → a connection string do Postgres criado na Parte 2
    - `SESSION_SECRET` → gere com `openssl rand -base64 32`

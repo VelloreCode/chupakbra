@@ -71,10 +71,9 @@ app.use((req, res, next) => {
     console.warn('Failed to initialize scraping queue, continuing without it:', error);
   }
 
-  // ALWAYS serve the app on port 5000
-  // this serves both the API and the client.
-  // It is the only port that is not firewalled.
-  const port = 5000;
+  // Porta do servidor — serve tanto a API quanto o client.
+  // Branch de teste: 5003 por padrão. Pode ser sobrescrita via PORT.
+  const port = Number(process.env.PORT) || 5003;
   server.listen({
     port,
     host: "0.0.0.0",
