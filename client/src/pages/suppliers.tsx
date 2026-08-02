@@ -48,6 +48,8 @@ interface SupplierInfo {
   displayName: string;
   website: string;
   credentialsConfigured: boolean;
+  /** Qual variável está faltando/inválida. Nunca contém valor de segredo. */
+  credentialsIssue: string | null;
   categoriesTotal: number;
   categoriesEnabled: number;
   lastRun: SyncRun | null;
@@ -369,9 +371,9 @@ function SupplierCard({
           <Clock className="mt-0.5 h-5 w-5 shrink-0" />
           <div className="text-sm">
             <strong className="block">Sincronização atrasada</strong>
-            {supplier.lastRun
+            {supplier.lastRealRunAt
               ? `A última execução foi ${formatAge(supplier.hoursSinceLastRun)} — o esperado é uma por dia. A rotina automática pode não estar rodando.`
-              : "Esta rotina nunca foi executada, embora existam categorias marcadas para monitorar."}
+              : "Esta rotina nunca foi executada de verdade, embora existam categorias marcadas para monitorar. Simulações não contam."}
             <span className="mt-1 block text-xs opacity-80">
               Verifique os logs do servidor e se o container ficou de pé no horário agendado.
               Enquanto isso, o botão abaixo dispara a sincronização manualmente.
@@ -432,9 +434,15 @@ function SupplierCard({
 
       <CardContent className="space-y-6">
         {!supplier.credentialsConfigured && (
-          <div className="rounded-md border border-yellow-200 bg-yellow-50 dark:bg-yellow-950 p-3 text-sm text-yellow-900 dark:text-yellow-100">
-            Cadastre as credenciais deste fornecedor nas variáveis de ambiente
-            (<code>.env</code> local ou Dokploy) e reinicie o servidor.
+          <div className="rounded-md border border-yellow-300 bg-yellow-50 p-3 text-sm text-yellow-900 dark:border-yellow-800 dark:bg-yellow-950 dark:text-yellow-100">
+            <strong className="block">Credenciais não configuradas</strong>
+            {supplier.credentialsIssue && (
+              <code className="mt-1 block break-words text-xs">{supplier.credentialsIssue}</code>
+            )}
+            <span className="mt-1 block">
+              Cadastre nas variáveis de ambiente (<code>.env</code> local ou painel do Dokploy)
+              e reinicie o servidor — alterar variável não tem efeito sem novo deploy.
+            </span>
           </div>
         )}
 

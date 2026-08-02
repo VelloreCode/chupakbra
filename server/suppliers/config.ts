@@ -123,20 +123,31 @@ export function getBartofilCredentials(): BartofilCredentials {
 }
 
 /**
- * Diz se as credenciais de um fornecedor estão presentes — sem revelar valor.
- * É o que a rota GET /api/suppliers devolve.
+ * Diz se as credenciais de um fornecedor estão presentes e, quando não estão,
+ * QUAL é o problema — sem nunca revelar valor.
+ *
+ * Devolver só um booleano obrigava a abrir log de servidor para descobrir se
+ * faltava a senha, o CNPJ ou a anon key. A mensagem já nomeia a variável.
  */
-export function areCredentialsConfigured(key: SupplierKey): boolean {
+export function checkCredentials(key: SupplierKey): { ok: boolean; issue: string | null } {
   try {
-    if (key === "tambasa") getTambasaCredentials();
-    else {
+    if (key === "tambasa") {
+      getTambasaCredentials();
+    } else {
       getBartofilConfig();
       getBartofilCredentials();
     }
-    return true;
-  } catch {
-    return false;
+    return { ok: true, issue: null };
+  } catch (error) {
+    return {
+      ok: false,
+      issue: error instanceof Error ? error.message : "credenciais indisponíveis",
+    };
   }
+}
+
+export function areCredentialsConfigured(key: SupplierKey): boolean {
+  return checkCredentials(key).ok;
 }
 
 export function isSupplierSyncEnabled(): boolean {

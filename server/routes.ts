@@ -859,7 +859,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
   app.get("/api/suppliers", authenticate, async (_req, res) => {
     try {
       const { SUPPLIER_META, listSupplierKeys } = await import("./suppliers/registry");
-      const { areCredentialsConfigured, isSupplierSyncEnabled } = await import("./suppliers/config");
+      const { checkCredentials, isSupplierSyncEnabled } = await import("./suppliers/config");
 
       // Janela de tolerância sobre o agendamento diário: 26h dá 2h de folga
       // para atraso de fila ou reinício de container sem virar alarme falso.
@@ -882,9 +882,12 @@ export async function registerRoutes(app: Express): Promise<Server> {
             ? (Date.now() - new Date(lastRealRun.startedAt).getTime()) / 3_600_000
             : null;
 
-          // Só alerta se a rotina deveria estar rodando: sem categoria marcada
-          // ou com o cron desligado, "atrasado" não significa nada.
-          const shouldHaveRun = syncEnabled && enabledCount > 0;
+          const credentials = checkCredentials(key);
+
+          // Só alerta se a rotina deveria estar rodando. Sem credencial, sem
+          // categoria marcada ou com o cron desligado, "atrasado" é ruído em
+          // cima de um problema que já está sinalizado em outro lugar.
+          const shouldHaveRun = syncEnabled && enabledCount > 0 && credentials.ok;
           const syncStale =
             shouldHaveRun && (hoursSinceLastRun === null || hoursSinceLastRun > STALE_AFTER_HOURS);
 
@@ -892,7 +895,8 @@ export async function registerRoutes(app: Express): Promise<Server> {
             key,
             displayName: SUPPLIER_META[key].displayName,
             website: SUPPLIER_META[key].website,
-            credentialsConfigured: areCredentialsConfigured(key),
+            credentialsConfigured: credentials.ok,
+            credentialsIssue: credentials.issue,
             categoriesTotal: categories.length,
             categoriesEnabled: enabledCount,
             lastRun: lastRun ?? null,
