@@ -67,13 +67,35 @@ export interface BartofilConfig {
   pageSize: number;
 }
 
+/**
+ * Limpa e valida um JWT vindo de variável de ambiente.
+ *
+ * A anon key tem ~200 caracteres e costuma ser colada em campo de texto de
+ * painel, onde acaba quebrada em duas linhas. Um \n no meio do valor vira
+ * "Invalid character in header content" na primeira requisição — mensagem que
+ * não diz nada sobre a causa. JWT não contém espaço em branco nenhum, então
+ * remover tudo é seguro e conserta o caso comum.
+ */
+function jwtFromEnv(name: string): string {
+  const cleaned = required(name).replace(/\s+/g, "");
+
+  if (cleaned.split(".").length !== 3) {
+    throw new SupplierConfigError(
+      `${name} não parece um JWT válido (esperado 3 partes separadas por ponto) — ` +
+        `confira se o valor foi colado inteiro e em uma linha só`,
+    );
+  }
+
+  return cleaned;
+}
+
 /** Lança apenas se a anon key faltar: sem ela nem a listagem pública funciona. */
 export function getBartofilConfig(): BartofilConfig {
   return {
     supabaseUrl: (
       process.env.BARTOFIL_SUPABASE_URL ?? "https://yadsszhyfgiyuqwvaydp.supabase.co"
     ).replace(/\/+$/, ""),
-    anonKey: required("BARTOFIL_SUPABASE_ANON_KEY"),
+    anonKey: jwtFromEnv("BARTOFIL_SUPABASE_ANON_KEY"),
     delayMs: num(process.env.BARTOFIL_DELAY_MS, 300),
     pageSize: num(process.env.BARTOFIL_PAGE_SIZE, 100),
   };

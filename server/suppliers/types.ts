@@ -25,6 +25,7 @@ export interface SupplierProduct {
 }
 
 export type SyncErrorCode =
+  | "CONFIG_INVALID"
   | "AUTH_FAILED"
   | "SESSION_EXPIRED"
   | "RATE_LIMITED"

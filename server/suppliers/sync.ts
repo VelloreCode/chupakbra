@@ -220,7 +220,9 @@ async function runOneSupplier(
     }
   } catch (error) {
     if (error instanceof SupplierConfigError) {
-      pushError("AUTH_FAILED", errorMessage(error));
+      // Credencial ausente ou malformada não é recusa do portal: separar os
+      // dois evita procurar problema de senha quando é variável de ambiente.
+      pushError("CONFIG_INVALID", errorMessage(error));
     } else if (error instanceof SupplierAuthError) {
       pushError("AUTH_FAILED", errorMessage(error));
     } else {
