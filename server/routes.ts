@@ -859,20 +859,48 @@ export async function registerRoutes(app: Express): Promise<Server> {
   app.get("/api/suppliers", authenticate, async (_req, res) => {
     try {
       const { SUPPLIER_META, listSupplierKeys } = await import("./suppliers/registry");
-      const { areCredentialsConfigured } = await import("./suppliers/config");
+      const { areCredentialsConfigured, isSupplierSyncEnabled } = await import("./suppliers/config");
+
+      // Janela de tolerância sobre o agendamento diário: 26h dá 2h de folga
+      // para atraso de fila ou reinício de container sem virar alarme falso.
+      const STALE_AFTER_HOURS = 26;
+      const syncEnabled = isSupplierSyncEnabled();
 
       const suppliers = await Promise.all(
         listSupplierKeys().map(async (key) => {
-          const [lastRun] = await storage.getSupplierSyncRuns(key, 1);
+          const recentRuns = await storage.getSupplierSyncRuns(key, 20);
+          const lastRun = recentRuns[0];
+          // Simulação não grava preço: contá-la como execução faria o card
+          // dizer "em dia" com os preços parados. A obsolescência olha só
+          // execuções reais.
+          const lastRealRun = recentRuns.find((r) => !r.dryRun);
+
           const categories = await storage.getSupplierCategories(key);
+          const enabledCount = categories.filter((c) => c.enabled).length;
+
+          const hoursSinceLastRun = lastRealRun?.startedAt
+            ? (Date.now() - new Date(lastRealRun.startedAt).getTime()) / 3_600_000
+            : null;
+
+          // Só alerta se a rotina deveria estar rodando: sem categoria marcada
+          // ou com o cron desligado, "atrasado" não significa nada.
+          const shouldHaveRun = syncEnabled && enabledCount > 0;
+          const syncStale =
+            shouldHaveRun && (hoursSinceLastRun === null || hoursSinceLastRun > STALE_AFTER_HOURS);
+
           return {
             key,
             displayName: SUPPLIER_META[key].displayName,
             website: SUPPLIER_META[key].website,
             credentialsConfigured: areCredentialsConfigured(key),
             categoriesTotal: categories.length,
-            categoriesEnabled: categories.filter((c) => c.enabled).length,
+            categoriesEnabled: enabledCount,
             lastRun: lastRun ?? null,
+            lastRealRunAt: lastRealRun?.startedAt ?? null,
+            syncEnabled,
+            hoursSinceLastRun,
+            syncStale,
+            staleAfterHours: STALE_AFTER_HOURS,
           };
         }),
       );

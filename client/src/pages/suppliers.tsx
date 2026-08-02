@@ -15,6 +15,7 @@ import { useToast } from "@/hooks/use-toast";
 import { apiRequest } from "@/lib/queryClient";
 import {
   AlertTriangle,
+  Clock,
   Copy,
   Download,
   Play,
@@ -50,6 +51,13 @@ interface SupplierInfo {
   categoriesTotal: number;
   categoriesEnabled: number;
   lastRun: SyncRun | null;
+  /** Última execução REAL (ignora simulações) — base do aviso de atraso. */
+  lastRealRunAt: string | null;
+  syncEnabled: boolean;
+  hoursSinceLastRun: number | null;
+  /** Calculado no servidor: a rotina deveria ter rodado e não rodou. */
+  syncStale: boolean;
+  staleAfterHours: number;
 }
 
 interface SupplierCategory {
@@ -80,6 +88,15 @@ interface SyncState {
 function formatDateTime(value: string | null): string {
   if (!value) return "nunca";
   return new Date(value).toLocaleString("pt-BR");
+}
+
+/** "há 3 dias" comunica atraso melhor que uma data que o leitor tem que subtrair. */
+function formatAge(hours: number | null): string {
+  if (hours === null) return "nunca executou";
+  if (hours < 1) return "há menos de 1 hora";
+  if (hours < 24) return `há ${Math.floor(hours)}h`;
+  const days = Math.floor(hours / 24);
+  return days === 1 ? "há 1 dia" : `há ${days} dias`;
 }
 
 function statusBadge(status: string) {
@@ -343,7 +360,25 @@ function SupplierCard({
   };
 
   return (
-    <Card>
+    <Card className={supplier.syncStale ? "border-red-400 dark:border-red-700" : undefined}>
+      {supplier.syncStale && (
+        <div
+          className="flex items-start gap-3 rounded-t-lg border-b border-red-300 bg-red-50 p-4 text-red-900 dark:border-red-800 dark:bg-red-950 dark:text-red-100"
+          role="alert"
+        >
+          <Clock className="mt-0.5 h-5 w-5 shrink-0" />
+          <div className="text-sm">
+            <strong className="block">Sincronização atrasada</strong>
+            {supplier.lastRun
+              ? `A última execução foi ${formatAge(supplier.hoursSinceLastRun)} — o esperado é uma por dia. A rotina automática pode não estar rodando.`
+              : "Esta rotina nunca foi executada, embora existam categorias marcadas para monitorar."}
+            <span className="mt-1 block text-xs opacity-80">
+              Verifique os logs do servidor e se o container ficou de pé no horário agendado.
+              Enquanto isso, o botão abaixo dispara a sincronização manualmente.
+            </span>
+          </div>
+        </div>
+      )}
       <CardHeader>
         <div className="flex flex-wrap items-start justify-between gap-4">
           <div>
@@ -358,7 +393,15 @@ function SupplierCard({
             </CardTitle>
             <CardDescription>
               {supplier.categoriesEnabled} de {supplier.categoriesTotal} categorias
-              monitoradas · última execução: {formatDateTime(lastRun?.startedAt ?? null)}
+              monitoradas · última sincronização:{" "}
+              {formatDateTime(supplier.lastRealRunAt)}
+              {supplier.lastRealRunAt && ` (${formatAge(supplier.hoursSinceLastRun)})`}
+              {!supplier.syncEnabled && (
+                <span className="mt-1 block text-amber-700 dark:text-amber-400">
+                  Rotina automática desligada neste ambiente (SUPPLIER_SYNC_ENABLED=false) —
+                  só roda pelo botão.
+                </span>
+              )}
             </CardDescription>
           </div>
 
