@@ -77,12 +77,26 @@ export interface BartofilConfig {
  * remover tudo é seguro e conserta o caso comum.
  */
 function jwtFromEnv(name: string): string {
-  const cleaned = required(name).replace(/\s+/g, "");
+  const raw = required(name);
 
-  if (cleaned.split(".").length !== 3) {
+  // Remove tudo que não pertence ao alfabeto de um JWT (base64url + ponto).
+  // Cobre quebra de linha, espaço comum, NBSP e — o caso que \s NÃO pega —
+  // caracteres de largura zero, que copiar-e-colar de página renderizada
+  // costuma trazer junto e são invisíveis em qualquer inspeção visual.
+  const cleaned = raw.replace(/[^A-Za-z0-9._-]/g, "");
+  const parts = cleaned.split(".").length;
+
+  if (parts !== 3) {
+    // O diagnóstico traz tamanho e número de partes, nunca o valor: é o que
+    // permite distinguir "veio truncado" de "veio grudado com a linha seguinte"
+    // sem precisar de acesso ao painel.
     throw new SupplierConfigError(
-      `${name} não parece um JWT válido (esperado 3 partes separadas por ponto) — ` +
-        `confira se o valor foi colado inteiro e em uma linha só`,
+      `${name} não parece um JWT válido: encontrei ${parts} parte(s) separadas por ponto, ` +
+        `esperado 3. Após limpeza sobraram ${cleaned.length} caracteres ` +
+        `(o valor bruto tinha ${raw.length}). ` +
+        `Uma anon key do Supabase tem por volta de 200. ` +
+        `Muito menos indica valor cortado; muito mais indica que a linha seguinte ` +
+        `do painel foi absorvida junto.`,
     );
   }
 
