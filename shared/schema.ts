@@ -5,6 +5,7 @@ import {
   timestamp,
   jsonb,
   index,
+  uniqueIndex,
   serial,
   decimal,
   boolean,
@@ -170,6 +171,51 @@ export const reportsHistory = pgTable("reports_history", {
   filePath: varchar("file_path", { length: 500 }), // Caminho do arquivo gerado (se aplicável)
   generatedAt: timestamp("generated_at").defaultNow().notNull(),
   createdAt: timestamp("created_at").defaultNow(),
+});
+
+// Supplier Categories table
+// Categorias dos portais dos fornecedores (Tambasa, Bartofil) que o usuário marca
+// para monitorar. `enabled` nasce false: a seleção é opt-in pela tela.
+export const supplierCategories = pgTable("supplier_categories", {
+  id: serial("id").primaryKey(),
+  supplier: varchar("supplier", { length: 30 }).notNull(), // "tambasa" | "bartofil"
+  // tambasa: path do slug ("material-de-construcao/carpintaria/fresas")
+  // bartofil: categoria.id do Supabase
+  externalId: varchar("external_id", { length: 500 }).notNull(),
+  label: varchar("label", { length: 255 }).notNull(),
+  parentExternalId: varchar("parent_external_id", { length: 500 }),
+  enabled: boolean("enabled").notNull().default(false),
+  lastSyncedAt: timestamp("last_synced_at"),
+  // Guarda quantos produtos a última varredura viu. Serve de detector de quebra:
+  // categoria que trazia >0 e passa a trazer 0 indica mudança de layout/API.
+  lastProductCount: integer("last_product_count").default(0),
+  createdAt: timestamp("created_at").defaultNow(),
+  updatedAt: timestamp("updated_at").defaultNow(),
+}, (table) => [
+  uniqueIndex("supplier_categories_supplier_external_uq").on(
+    table.supplier,
+    table.externalId,
+  ),
+]);
+
+// Supplier Sync Runs table
+// Histórico das execuções de sincronização. Existe no banco porque o estado da
+// execução vive em memória e não sobrevive a restart.
+export const supplierSyncRuns = pgTable("supplier_sync_runs", {
+  id: serial("id").primaryKey(),
+  supplier: varchar("supplier", { length: 30 }).notNull(),
+  status: varchar("status", { length: 20 }).notNull(), // running, success, partial, failed
+  trigger: varchar("trigger", { length: 20 }).notNull(), // cron, manual
+  dryRun: boolean("dry_run").notNull().default(false),
+  startedAt: timestamp("started_at").defaultNow().notNull(),
+  finishedAt: timestamp("finished_at"),
+  categoriesProcessed: integer("categories_processed").default(0),
+  productsSeen: integer("products_seen").default(0),
+  productsMatched: integer("products_matched").default(0),
+  pricesUpdated: integer("prices_updated").default(0),
+  productsSkipped: integer("products_skipped").default(0),
+  unmatchedCodes: jsonb("unmatched_codes"), // { total: number, sample: string[] }
+  errorDetails: jsonb("error_details"),
 });
 
 // Relations
@@ -338,6 +384,23 @@ export const insertReportsHistorySchema = createInsertSchema(reportsHistory).omi
   createdAt: true,
 });
 
+export const insertSupplierCategorySchema = createInsertSchema(supplierCategories).omit({
+  id: true,
+  createdAt: true,
+  updatedAt: true,
+}).extend({
+  supplier: z.enum(["tambasa", "bartofil"]),
+});
+
+export const insertSupplierSyncRunSchema = createInsertSchema(supplierSyncRuns).omit({
+  id: true,
+  startedAt: true,
+}).extend({
+  supplier: z.enum(["tambasa", "bartofil"]),
+  status: z.enum(["running", "success", "partial", "failed"]),
+  trigger: z.enum(["cron", "manual"]),
+});
+
 // Types
 export type UpsertUser = typeof users.$inferInsert;
 export type User = typeof users.$inferSelect;
@@ -362,3 +425,7 @@ export type InsertPriceMonitoringHistory = z.infer<typeof insertPriceMonitoringH
 export type PriceMonitoringHistory = typeof priceMonitoringHistory.$inferSelect;
 export type InsertReportsHistory = z.infer<typeof insertReportsHistorySchema>;
 export type ReportsHistory = typeof reportsHistory.$inferSelect;
+export type InsertSupplierCategory = z.infer<typeof insertSupplierCategorySchema>;
+export type SupplierCategory = typeof supplierCategories.$inferSelect;
+export type InsertSupplierSyncRun = z.infer<typeof insertSupplierSyncRunSchema>;
+export type SupplierSyncRun = typeof supplierSyncRuns.$inferSelect;

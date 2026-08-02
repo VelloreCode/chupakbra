@@ -32,6 +32,12 @@ import {
   reportsHistory,
   type ReportsHistory,
   type InsertReportsHistory,
+  supplierCategories,
+  type SupplierCategory,
+  type InsertSupplierCategory,
+  supplierSyncRuns,
+  type SupplierSyncRun,
+  type InsertSupplierSyncRun,
 } from "@shared/schema";
 import { db } from "./db";
 import { eq, sql, desc, asc, and, or, ilike, count, isNull, like, isNotNull, ne, gte, lte, inArray } from "drizzle-orm";
@@ -141,6 +147,23 @@ export interface IStorage {
   // Price monitoring history
   getPriceMonitoringHistory(productId?: number): Promise<Array<PriceMonitoringHistory & { product: Product }>>;
   createPriceMonitoringHistory(history: InsertPriceMonitoringHistory): Promise<PriceMonitoringHistory>;
+
+  // Supplier sync (Tambasa / Bartofil)
+  getOrCreateCompetitorByName(name: string, website?: string): Promise<Competitor>;
+  findProductBySupplierCode(competitorId: number, code: string): Promise<Product | undefined>;
+  upsertCompetitorPrice(input: {
+    productId: number;
+    competitorId: number;
+    price: string;
+    isAvailable?: boolean;
+  }): Promise<Price>;
+  getSupplierCategories(supplier?: string, onlyEnabled?: boolean): Promise<SupplierCategory[]>;
+  upsertSupplierCategories(rows: InsertSupplierCategory[]): Promise<{ total: number; created: number }>;
+  setSupplierCategoryEnabled(id: number, enabled: boolean): Promise<SupplierCategory | undefined>;
+  markSupplierCategorySynced(id: number, productCount: number): Promise<void>;
+  createSupplierSyncRun(run: InsertSupplierSyncRun): Promise<SupplierSyncRun>;
+  finishSupplierSyncRun(id: number, patch: Partial<InsertSupplierSyncRun>): Promise<void>;
+  getSupplierSyncRuns(supplier?: string, limit?: number): Promise<SupplierSyncRun[]>;
 
   // Recent products
   getRecentlyUpdatedProducts(): Promise<Array<Product & { lastPriceUpdate: Date; client?: Client }>>;
@@ -610,8 +633,8 @@ export class DatabaseStorage implements IStorage {
         productId: product.id,
         clientId: isMaster ? masterClient.id : undefined,
         price: productData.basePrice,
-        currency: "BRL",
-        extractedAt: new Date()
+        sourceType: isMaster ? "client" : "competitor",
+        lastUpdated: new Date()
       });
     }
 
@@ -667,20 +690,25 @@ export class DatabaseStorage implements IStorage {
             await db.insert(prices).values({
               productId: product.id,
               clientId: product.clientId,
+              competitorId: product.competitorId,
+              sourceType: product.sourceType === "competitor" ? "competitor" : "client",
               price: newPrice.toString(),
-              currency: "BRL",
-              extractedAt: new Date()
+              lastUpdated: new Date()
             });
 
-            // Create price history record
-            await this.createPriceHistory({
-              productId: product.id,
-              clientId: product.clientId,
-              oldPrice: currentPrice.toString(),
-              newPrice: newPrice.toString(),
-              changeDate: new Date()
-            });
-              
+            // Create price history record.
+            // priceHistory.clientId é NOT NULL: produto de concorrente não tem cliente,
+            // então o histórico fica só em priceMonitoringHistory (gravado acima).
+            if (product.clientId != null) {
+              await this.createPriceHistory({
+                productId: product.id,
+                clientId: product.clientId,
+                oldPrice: currentPrice.toString(),
+                newPrice: newPrice.toString(),
+                changeReason: "url_monitoring"
+              });
+            }
+
             console.log(`[PRICE MONITOR] Price changed for ${product.name}: R$ ${currentPrice} -> R$ ${newPrice}`);
           } else {
             console.log(`[PRICE MONITOR] No significant price change for ${product.name}: R$ ${newPrice}`);
@@ -740,6 +768,202 @@ export class DatabaseStorage implements IStorage {
   async createPriceMonitoringHistory(history: InsertPriceMonitoringHistory): Promise<PriceMonitoringHistory> {
     const [result] = await db.insert(priceMonitoringHistory).values(history).returning();
     return result;
+  }
+
+  // ---------------------------------------------------------------------------
+  // Supplier sync (Tambasa / Bartofil)
+  // ---------------------------------------------------------------------------
+
+  async getOrCreateCompetitorByName(name: string, website?: string): Promise<Competitor> {
+    const [existing] = await db
+      .select()
+      .from(competitors)
+      .where(ilike(competitors.name, name))
+      .limit(1);
+
+    if (existing) return existing;
+
+    const [created] = await db
+      .insert(competitors)
+      .values({ name, website: website ?? null })
+      .returning();
+    return created;
+  }
+
+  /**
+   * Casa o código do portal com um produto já cadastrado deste concorrente.
+   * Nunca cria produto — a automação só atualiza o que já existe.
+   *
+   * Tenta, nesta ordem: sku, brandSku e (fallback) sourceUrl contendo o código.
+   * Compara o código como veio e sem zeros à esquerda, porque a Tambasa exibe
+   * com padding ("017571") e a Bartofil não ("17571").
+   */
+  async findProductBySupplierCode(competitorId: number, code: string): Promise<Product | undefined> {
+    const raw = code.trim();
+    if (!raw) return undefined;
+
+    const variants = Array.from(new Set([raw, raw.replace(/^0+/, "")])).filter(Boolean);
+    if (variants.length === 0) return undefined;
+
+    const [byCode] = await db
+      .select()
+      .from(products)
+      .where(
+        and(
+          eq(products.competitorId, competitorId),
+          or(inArray(products.sku, variants), inArray(products.brandSku, variants)),
+        ),
+      )
+      .limit(1);
+
+    if (byCode) return byCode;
+
+    const [byUrl] = await db
+      .select()
+      .from(products)
+      .where(
+        and(
+          eq(products.competitorId, competitorId),
+          isNotNull(products.sourceUrl),
+          or(...variants.map((v) => like(products.sourceUrl, `%${v}%`))),
+        ),
+      )
+      .limit(1);
+
+    return byUrl;
+  }
+
+  /**
+   * Grava o preço do concorrente com read-then-write.
+   *
+   * Deliberadamente NÃO usa onConflictDoUpdate: não existe unique index em
+   * (product_id, competitor_id) — é exatamente o que quebra `bulkUpsertPrices`.
+   */
+  async upsertCompetitorPrice(input: {
+    productId: number;
+    competitorId: number;
+    price: string;
+    isAvailable?: boolean;
+  }): Promise<Price> {
+    const [existing] = await db
+      .select()
+      .from(prices)
+      .where(
+        and(
+          eq(prices.productId, input.productId),
+          eq(prices.competitorId, input.competitorId),
+        ),
+      )
+      .limit(1);
+
+    const now = new Date();
+
+    if (existing) {
+      const [updated] = await db
+        .update(prices)
+        .set({
+          price: input.price,
+          isAvailable: input.isAvailable ?? true,
+          sourceType: "competitor",
+          lastUpdated: now,
+          updatedAt: now,
+        })
+        .where(eq(prices.id, existing.id))
+        .returning();
+      return updated;
+    }
+
+    const [created] = await db
+      .insert(prices)
+      .values({
+        productId: input.productId,
+        competitorId: input.competitorId,
+        clientId: null,
+        sourceType: "competitor",
+        price: input.price,
+        discount: "0",
+        isAvailable: input.isAvailable ?? true,
+        lastUpdated: now,
+        updatedAt: now,
+      })
+      .returning();
+    return created;
+  }
+
+  async getSupplierCategories(supplier?: string, onlyEnabled = false): Promise<SupplierCategory[]> {
+    const conditions = [];
+    if (supplier) conditions.push(eq(supplierCategories.supplier, supplier));
+    if (onlyEnabled) conditions.push(eq(supplierCategories.enabled, true));
+
+    const base = db.select().from(supplierCategories);
+    const query = conditions.length > 0 ? base.where(and(...conditions)) : base;
+
+    return await query.orderBy(asc(supplierCategories.label));
+  }
+
+  /**
+   * Upsert das categorias descobertas no portal.
+   * NÃO sobrescreve `enabled`: redescobrir categorias não pode desmarcar a
+   * seleção que a pessoa fez na tela.
+   */
+  async upsertSupplierCategories(rows: InsertSupplierCategory[]): Promise<{ total: number; created: number }> {
+    if (rows.length === 0) return { total: 0, created: 0 };
+
+    const supplier = rows[0].supplier;
+    const existing = await db
+      .select({ externalId: supplierCategories.externalId })
+      .from(supplierCategories)
+      .where(eq(supplierCategories.supplier, supplier));
+
+    const known = new Set(existing.map((r) => r.externalId));
+    const created = rows.filter((r) => !known.has(r.externalId)).length;
+
+    for (const row of rows) {
+      await db
+        .insert(supplierCategories)
+        .values(row)
+        .onConflictDoUpdate({
+          target: [supplierCategories.supplier, supplierCategories.externalId],
+          set: {
+            label: row.label,
+            parentExternalId: row.parentExternalId ?? null,
+            updatedAt: new Date(),
+          },
+        });
+    }
+
+    return { total: rows.length, created };
+  }
+
+  async setSupplierCategoryEnabled(id: number, enabled: boolean): Promise<SupplierCategory | undefined> {
+    const [updated] = await db
+      .update(supplierCategories)
+      .set({ enabled, updatedAt: new Date() })
+      .where(eq(supplierCategories.id, id))
+      .returning();
+    return updated;
+  }
+
+  async markSupplierCategorySynced(id: number, productCount: number): Promise<void> {
+    await db
+      .update(supplierCategories)
+      .set({ lastSyncedAt: new Date(), lastProductCount: productCount, updatedAt: new Date() })
+      .where(eq(supplierCategories.id, id));
+  }
+
+  async createSupplierSyncRun(run: InsertSupplierSyncRun): Promise<SupplierSyncRun> {
+    const [created] = await db.insert(supplierSyncRuns).values(run).returning();
+    return created;
+  }
+
+  async finishSupplierSyncRun(id: number, patch: Partial<InsertSupplierSyncRun>): Promise<void> {
+    await db.update(supplierSyncRuns).set(patch).where(eq(supplierSyncRuns.id, id));
+  }
+
+  async getSupplierSyncRuns(supplier?: string, limit = 20): Promise<SupplierSyncRun[]> {
+    const base = db.select().from(supplierSyncRuns);
+    const query = supplier ? base.where(eq(supplierSyncRuns.supplier, supplier)) : base;
+    return await query.orderBy(desc(supplierSyncRuns.startedAt)).limit(limit);
   }
 
   async getMasterProductsWithCompetitors(specificMasterId?: number, competitorClientId?: number): Promise<Array<{
@@ -1208,6 +1432,13 @@ export class DatabaseStorage implements IStorage {
     await db.delete(prices).where(eq(prices.id, id));
   }
 
+  /**
+   * @deprecated QUEBRADO — não usar.
+   * O onConflictDoUpdate abaixo aponta para (product_id, client_id), mas a tabela `prices`
+   * só tem a PK serial: não existe unique index nessas colunas. Qualquer chamada levanta
+   * `42P10: there is no unique or exclusion constraint matching the ON CONFLICT specification`.
+   * Para gravar preço de concorrente use `upsertCompetitorPrice`, que faz read-then-write.
+   */
   async bulkUpsertPrices(priceList: InsertPrice[]): Promise<void> {
     for (const price of priceList) {
       await db

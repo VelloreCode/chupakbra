@@ -26,6 +26,7 @@ import {
   Upload,
   FileText,
   HelpCircle,
+  Truck,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 
@@ -90,6 +91,12 @@ export default function Sidebar() {
       name: "Produtos URL",
       href: "/products-url",
       icon: Globe,
+      show: permissions.canAccessProductsUrl,
+    },
+    {
+      name: "Fornecedores",
+      href: "/suppliers",
+      icon: Truck,
       show: permissions.canAccessProductsUrl,
     },
     {

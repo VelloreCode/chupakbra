@@ -38,6 +38,69 @@ export function startCronJobs() {
   console.log(`[CRON] Next execution will be at: ${getNextCronTime()}`);
   console.log(`[CRON] Cron task active: ${task ? 'YES' : 'NO'}`);
   console.log('========================================');
+
+  startSupplierSyncJob();
+}
+
+/**
+ * Sincronização diária de preços dos fornecedores (Tambasa, Bartofil).
+ *
+ * Separado do job acima de propósito: aquele raspa produto a produto por
+ * sourceUrl, sem login; este entra autenticado nos portais e varre só as
+ * categorias marcadas na tela.
+ */
+function startSupplierSyncJob() {
+  if (process.env.SUPPLIER_SYNC_ENABLED === 'false') {
+    console.log('[CRON] Supplier sync desabilitado (SUPPLIER_SYNC_ENABLED=false)');
+    return;
+  }
+
+  const expression = process.env.SUPPLIER_SYNC_CRON?.trim() || '0 7 * * *';
+
+  if (!cron.validate(expression)) {
+    console.error(`[CRON] SUPPLIER_SYNC_CRON inválido ("${expression}") — job não agendado`);
+    return;
+  }
+
+  cron.schedule(expression, async () => {
+    const jobStartTime = new Date();
+    console.log('========================================');
+    console.log(`[CRON] Supplier sync TRIGGERED at ${jobStartTime.toISOString()}`);
+    console.log('========================================');
+
+    try {
+      const { runSupplierSync } = await import('./suppliers/sync');
+      const summaries = await runSupplierSync({ trigger: 'cron' });
+
+      for (const summary of summaries) {
+        console.log(
+          `[CRON] ${summary.supplier}: ${summary.status} — ` +
+          `vistos ${summary.counters.seen}, casados ${summary.counters.matched}, ` +
+          `atualizados ${summary.counters.updated}, erros ${summary.errors.length}`
+        );
+      }
+    } catch (error) {
+      console.error('[CRON] Error in supplier sync job:', error);
+    }
+  }, {
+    timezone: "America/Sao_Paulo"
+  });
+
+  console.log(`[CRON] Supplier sync scheduled: "${expression}" (America/Sao_Paulo)`);
+  console.log('========================================');
+}
+
+export async function runSupplierSyncManually(options: { dryRun?: boolean } = {}) {
+  console.log(`[MANUAL_CRON] Starting manual supplier sync (dryRun=${options.dryRun ?? false})...`);
+  try {
+    const { runSupplierSync } = await import('./suppliers/sync');
+    const summaries = await runSupplierSync({ trigger: 'manual', dryRun: options.dryRun });
+    console.log('[MANUAL_CRON] Manual supplier sync completed');
+    return { success: true, summaries };
+  } catch (error) {
+    console.error('[MANUAL_CRON] Error in manual supplier sync:', error);
+    throw error;
+  }
 }
 
 function getNextCronTime(): string {

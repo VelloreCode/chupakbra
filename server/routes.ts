@@ -847,6 +847,214 @@ export async function registerRoutes(app: Express): Promise<Server> {
     }
   });
 
+  // ===========================================================================
+  // Fornecedores (Tambasa / Bartofil) — extração automática de preços
+  // ===========================================================================
+
+  const supplierKeySchema = z.enum(["tambasa", "bartofil"]);
+
+  // Lista os fornecedores e se as credenciais estão presentes.
+  // Devolve BOOLEANO, nunca o valor: o middleware de log em server/index.ts
+  // imprime o corpo de toda resposta /api.
+  app.get("/api/suppliers", authenticate, async (_req, res) => {
+    try {
+      const { SUPPLIER_META, listSupplierKeys } = await import("./suppliers/registry");
+      const { areCredentialsConfigured } = await import("./suppliers/config");
+
+      const suppliers = await Promise.all(
+        listSupplierKeys().map(async (key) => {
+          const [lastRun] = await storage.getSupplierSyncRuns(key, 1);
+          const categories = await storage.getSupplierCategories(key);
+          return {
+            key,
+            displayName: SUPPLIER_META[key].displayName,
+            website: SUPPLIER_META[key].website,
+            credentialsConfigured: areCredentialsConfigured(key),
+            categoriesTotal: categories.length,
+            categoriesEnabled: categories.filter((c) => c.enabled).length,
+            lastRun: lastRun ?? null,
+          };
+        }),
+      );
+
+      res.json(suppliers);
+    } catch (error) {
+      console.error("Error listing suppliers:", error);
+      res.status(500).json({ message: "Failed to list suppliers" });
+    }
+  });
+
+  app.get("/api/suppliers/:key/categories", authenticate, async (req, res) => {
+    try {
+      const key = supplierKeySchema.parse(req.params.key);
+      const onlyEnabled = req.query.enabled === "true";
+      res.json(await storage.getSupplierCategories(key, onlyEnabled));
+    } catch (error) {
+      if (error instanceof z.ZodError) {
+        return res.status(400).json({ message: "Fornecedor inválido" });
+      }
+      console.error("Error fetching supplier categories:", error);
+      res.status(500).json({ message: "Failed to fetch supplier categories" });
+    }
+  });
+
+  // Busca a árvore de categorias no portal e faz upsert.
+  // Não altera `enabled`: redescobrir não pode desmarcar a seleção do usuário.
+  app.post("/api/suppliers/:key/categories/discover", authenticate, async (req, res) => {
+    let adapter: Awaited<ReturnType<typeof import("./suppliers/registry").getAdapter>> | null = null;
+    try {
+      const key = supplierKeySchema.parse(req.params.key);
+      const { getAdapter } = await import("./suppliers/registry");
+
+      adapter = await getAdapter(key);
+      const categories = await adapter.listCategories();
+
+      const result = await storage.upsertSupplierCategories(
+        categories.map((cat) => ({
+          supplier: key,
+          externalId: cat.externalId,
+          label: cat.label,
+          parentExternalId: cat.parentExternalId ?? null,
+        })),
+      );
+
+      res.json({ discovered: result.total, created: result.created });
+    } catch (error) {
+      if (error instanceof z.ZodError) {
+        return res.status(400).json({ message: "Fornecedor inválido" });
+      }
+      console.error("Error discovering supplier categories:", error);
+      res.status(500).json({
+        message: "Failed to discover categories",
+        error: error instanceof Error ? error.message : "Unknown error",
+      });
+    } finally {
+      await adapter?.close().catch(() => undefined);
+    }
+  });
+
+  app.patch("/api/suppliers/categories/:id", authenticate, async (req, res) => {
+    try {
+      let id: number;
+      try {
+        id = validateId(req.params.id, "ID da categoria");
+      } catch {
+        return res.status(400).json({ message: "ID inválido" });
+      }
+
+      const { enabled } = z.object({ enabled: z.boolean() }).parse(req.body);
+      const updated = await storage.setSupplierCategoryEnabled(id, enabled);
+
+      if (!updated) return res.status(404).json({ message: "Categoria não encontrada" });
+      res.json(updated);
+    } catch (error) {
+      if (error instanceof z.ZodError) {
+        return res.status(400).json({ message: "Body inválido: esperado { enabled: boolean }" });
+      }
+      console.error("Error updating supplier category:", error);
+      res.status(500).json({ message: "Failed to update supplier category" });
+    }
+  });
+
+  // Dispara a sincronização. Responde 202 e segue em background — a varredura
+  // leva minutos, então a UI acompanha por /api/suppliers/sync-status.
+  app.post("/api/suppliers/sync", authenticate, async (req, res) => {
+    try {
+      const body = z
+        .object({
+          suppliers: z.array(supplierKeySchema).optional(),
+          dryRun: z.boolean().optional(),
+          maxPagesPerCategory: z.number().int().positive().optional(),
+        })
+        .parse(req.body ?? {});
+
+      const { runSupplierSync, getSupplierSyncState } = await import("./suppliers/sync");
+      const { SyncAlreadyRunningError } = await import("./suppliers/types");
+
+      if (getSupplierSyncState().running) {
+        return res.status(409).json({ message: "Já existe uma sincronização em andamento" });
+      }
+
+      void runSupplierSync({ ...body, trigger: "manual" }).catch((error) => {
+        if (error instanceof SyncAlreadyRunningError) return;
+        console.error("[SUPPLIER] sincronização falhou:", error);
+      });
+
+      res.status(202).json({ started: true, dryRun: body.dryRun ?? false });
+    } catch (error) {
+      if (error instanceof z.ZodError) {
+        return res.status(400).json({ message: "Parâmetros inválidos" });
+      }
+      console.error("Error starting supplier sync:", error);
+      res.status(500).json({ message: "Failed to start supplier sync" });
+    }
+  });
+
+  app.get("/api/suppliers/sync-status", authenticate, async (_req, res) => {
+    try {
+      const { getSupplierSyncState } = await import("./suppliers/sync");
+      res.json(getSupplierSyncState());
+    } catch (error) {
+      console.error("Error fetching supplier sync status:", error);
+      res.status(500).json({ message: "Failed to fetch sync status" });
+    }
+  });
+
+  app.get("/api/suppliers/runs", authenticate, async (req, res) => {
+    try {
+      const supplier = req.query.supplier ? supplierKeySchema.parse(req.query.supplier) : undefined;
+      const limit = req.query.limit ? Number(req.query.limit) : 20;
+      res.json(await storage.getSupplierSyncRuns(supplier, Number.isFinite(limit) ? limit : 20));
+    } catch (error) {
+      if (error instanceof z.ZodError) {
+        return res.status(400).json({ message: "Fornecedor inválido" });
+      }
+      console.error("Error fetching supplier runs:", error);
+      res.status(500).json({ message: "Failed to fetch supplier runs" });
+    }
+  });
+
+  // Espelho de /api/cron/test-daily-update, para testar o job manualmente.
+  app.post("/api/cron/test-supplier-sync", authenticate, async (req, res) => {
+    try {
+      console.log("[API] Manual supplier sync triggered by user");
+      const { runSupplierSyncManually } = await import("./cron");
+      const dryRun = req.body?.dryRun === true;
+      res.json(await runSupplierSyncManually({ dryRun }));
+    } catch (error) {
+      console.error("Error running manual supplier sync:", error);
+      res.status(500).json({
+        message: "Failed to run supplier sync",
+        error: error instanceof Error ? error.message : "Unknown error",
+      });
+    }
+  });
+
+  // Gatilho para agendador externo. Mesma guarda de /api/products/update-prices.
+  app.post("/api/suppliers/sync-cron", async (req, res) => {
+    try {
+      const authHeader = req.headers.authorization;
+      const expected = `Bearer ${process.env.CRON_SECRET || "default-cron-secret"}`;
+      if (authHeader !== expected) {
+        return res.status(401).json({ message: "Unauthorized" });
+      }
+
+      const { runSupplierSync, getSupplierSyncState } = await import("./suppliers/sync");
+      if (getSupplierSyncState().running) {
+        return res.status(409).json({ message: "Já existe uma sincronização em andamento" });
+      }
+
+      void runSupplierSync({ trigger: "cron" }).catch((error) => {
+        console.error("[SUPPLIER] sincronização (cron externo) falhou:", error);
+      });
+
+      res.status(202).json({ started: true });
+    } catch (error) {
+      console.error("Error starting supplier sync via cron:", error);
+      res.status(500).json({ message: "Failed to start supplier sync" });
+    }
+  });
+
   // Get master products with their competitors
   app.get("/api/products/masters-with-competitors", isAuthenticated, async (req, res) => {
     try {

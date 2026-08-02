@@ -1,0 +1,147 @@
+// Gravação dos preços coletados.
+//
+// É o ÚNICO ponto do módulo que fala com `storage`. O dry-run mora todo aqui:
+// espalhar `if (dryRun)` pelos adapters é como uma escrita acaba vazando.
+
+import { storage } from "../storage";
+import type { SupplierKey, SupplierProduct, SyncCounters } from "./types";
+import { normalizeCode } from "./util";
+
+/** Preço acima disso é quase certamente erro de parsing, não reajuste. */
+const MAX_PLAUSIBLE_PRICE = 1_000_000;
+/** Salto maior que este fator em relação ao preço anterior é suspeito. */
+const MAX_PRICE_JUMP_FACTOR = 10;
+/** Quantos códigos não casados guardar como amostra no resumo. */
+const UNMATCHED_SAMPLE_SIZE = 50;
+
+export type WriteOutcome = "updated" | "unchanged" | "unmatched" | "skipped";
+
+export interface SupplierWriterOptions {
+  supplier: SupplierKey;
+  competitorId: number;
+  dryRun: boolean;
+  logPrefix: string;
+  onSkip?: (code: string, reason: string) => void;
+}
+
+export class SupplierWriter {
+  readonly counters: SyncCounters = {
+    seen: 0,
+    matched: 0,
+    updated: 0,
+    unchanged: 0,
+    skipped: 0,
+    errors: 0,
+  };
+
+  private readonly unmatchedSample: string[] = [];
+  private unmatchedTotal = 0;
+
+  constructor(private readonly options: SupplierWriterOptions) {}
+
+  get unmatched(): { total: number; sample: string[] } {
+    return { total: this.unmatchedTotal, sample: [...this.unmatchedSample] };
+  }
+
+  async write(item: SupplierProduct): Promise<WriteOutcome> {
+    this.counters.seen++;
+
+    const code = normalizeCode(item.externalCode);
+    if (!code) {
+      this.counters.skipped++;
+      return "skipped";
+    }
+
+    const product = await storage.findProductBySupplierCode(this.options.competitorId, code);
+
+    // Só atualizamos o que já existe: produto desconhecido vira relatório,
+    // para a pessoa decidir importar pelo fluxo de XLSX.
+    if (!product) {
+      this.counters.skipped++;
+      this.unmatchedTotal++;
+      if (this.unmatchedSample.length < UNMATCHED_SAMPLE_SIZE) {
+        this.unmatchedSample.push(code);
+      }
+      return "unmatched";
+    }
+
+    this.counters.matched++;
+
+    const newPrice = item.price;
+    if (newPrice === null || newPrice === undefined) {
+      this.counters.skipped++;
+      this.options.onSkip?.(code, "sem preço na listagem");
+      return "skipped";
+    }
+
+    const oldPrice = parseFloat(product.basePrice ?? "0");
+
+    if (!this.isPlausible(newPrice, oldPrice, code)) {
+      this.counters.skipped++;
+      return "skipped";
+    }
+
+    const changed = Math.abs(newPrice - oldPrice) > 0.01;
+
+    if (this.options.dryRun) {
+      if (changed) this.counters.updated++;
+      else this.counters.unchanged++;
+      return changed ? "updated" : "unchanged";
+    }
+
+    // Histórico de verificação é gravado sempre — inclusive quando o preço não
+    // mudou —, espelhando updateProductPricesFromUrl. É o que faz a tela de
+    // monitoramento mostrar que a checagem aconteceu.
+    await storage.createPriceMonitoringHistory({
+      productId: product.id,
+      priceOld: oldPrice > 0 ? oldPrice.toFixed(2) : undefined,
+      priceNew: newPrice.toFixed(2),
+      dateChecked: new Date(),
+      source: `supplier_${this.options.supplier}`,
+    });
+
+    if (!changed) {
+      this.counters.unchanged++;
+      return "unchanged";
+    }
+
+    await storage.updateProduct(product.id, { basePrice: newPrice.toFixed(2) });
+
+    await storage.upsertCompetitorPrice({
+      productId: product.id,
+      competitorId: this.options.competitorId,
+      price: newPrice.toFixed(2),
+      isAvailable: item.isAvailable ?? true,
+    });
+
+    // priceHistory não entra: clientId é NOT NULL e produto de concorrente não
+    // tem cliente. O histórico do fornecedor vive em priceMonitoringHistory.
+
+    this.counters.updated++;
+    return "updated";
+  }
+
+  /**
+   * Portão de sanidade. Um bug de parsing não pode envenenar os relatórios de
+   * comparação, então preço implausível é descartado em vez de gravado.
+   */
+  private isPlausible(newPrice: number, oldPrice: number, code: string): boolean {
+    let reason: string | null = null;
+
+    if (!Number.isFinite(newPrice) || newPrice <= 0) {
+      reason = `preço inválido (${newPrice})`;
+    } else if (newPrice > MAX_PLAUSIBLE_PRICE) {
+      reason = `preço acima do teto (${newPrice})`;
+    } else if (oldPrice > 0 && newPrice > oldPrice * MAX_PRICE_JUMP_FACTOR) {
+      reason = `salto de ${oldPrice} para ${newPrice} (>${MAX_PRICE_JUMP_FACTOR}x)`;
+    }
+
+    if (reason) {
+      console.warn(`${this.options.logPrefix} PRICE_OUT_OF_BOUNDS código ${code}: ${reason}`);
+      this.options.onSkip?.(code, reason);
+      return false;
+    }
+
+    return true;
+  }
+}
