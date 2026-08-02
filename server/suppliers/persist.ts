@@ -4,7 +4,7 @@
 // espalhar `if (dryRun)` pelos adapters é como uma escrita acaba vazando.
 
 import { storage } from "../storage";
-import type { SupplierKey, SupplierProduct, SyncCounters } from "./types";
+import type { MatchStrategy, SupplierKey, SupplierProduct, SyncCounters } from "./types";
 import { normalizeCode } from "./util";
 
 /** Preço acima disso é quase certamente erro de parsing, não reajuste. */
@@ -18,7 +18,13 @@ export type WriteOutcome = "updated" | "unchanged" | "unmatched" | "skipped";
 
 export interface SupplierWriterOptions {
   supplier: SupplierKey;
-  competitorId: number;
+  /**
+   * Linha de `clients` do fornecedor. Tambasa e Bartofil são concorrentes no
+   * sentido do negócio, mas no banco isso vive em `products.is_competitor` +
+   * `client_id` — a tabela `competitors` nunca foi usada.
+   */
+  clientId: number;
+  matchStrategy: MatchStrategy;
   dryRun: boolean;
   logPrefix: string;
   onSkip?: (code: string, reason: string) => void;
@@ -52,7 +58,11 @@ export class SupplierWriter {
       return "skipped";
     }
 
-    const product = await storage.findProductBySupplierCode(this.options.competitorId, code);
+    const product = await storage.findProductBySupplierCode(
+      this.options.clientId,
+      code,
+      this.options.matchStrategy,
+    );
 
     // Só atualizamos o que já existe: produto desconhecido vira relatório,
     // para a pessoa decidir importar pelo fluxo de XLSX.
@@ -107,15 +117,20 @@ export class SupplierWriter {
 
     await storage.updateProduct(product.id, { basePrice: newPrice.toFixed(2) });
 
-    await storage.upsertCompetitorPrice({
+    await storage.upsertSupplierPrice({
       productId: product.id,
-      competitorId: this.options.competitorId,
+      clientId: this.options.clientId,
       price: newPrice.toFixed(2),
       isAvailable: item.isAvailable ?? true,
     });
 
-    // priceHistory não entra: clientId é NOT NULL e produto de concorrente não
-    // tem cliente. O histórico do fornecedor vive em priceMonitoringHistory.
+    await storage.createPriceHistory({
+      productId: product.id,
+      clientId: this.options.clientId,
+      oldPrice: oldPrice > 0 ? oldPrice.toFixed(2) : null,
+      newPrice: newPrice.toFixed(2),
+      changeReason: `supplier_${this.options.supplier}`,
+    });
 
     this.counters.updated++;
     return "updated";

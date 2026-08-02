@@ -126,7 +126,15 @@ async function runOneSupplier(
     runId = run.id;
     state.runId = runId;
 
-    const competitor = await storage.getOrCreateCompetitorByName(meta.competitorName, meta.website);
+    // Não criamos o cliente se faltar: criar uma linha nova só produziria um
+    // fornecedor sem nenhum produto vinculado, e a varredura inteira acabaria
+    // como "0 casados" sem explicar o porquê.
+    const supplierClient = await storage.getClientByName(meta.clientName);
+    if (!supplierClient) {
+      throw new Error(
+        `Cliente "${meta.clientName}" não existe em clients — cadastre-o antes de sincronizar`,
+      );
+    }
 
     let categories = await storage.getSupplierCategories(supplier, true);
     if (options.categoryExternalIds?.length) {
@@ -141,14 +149,16 @@ async function runOneSupplier(
       return summary;
     }
 
+    const adapter = await getAdapter(supplier);
+
     writer = new SupplierWriter({
       supplier,
-      competitorId: competitor.id,
+      clientId: supplierClient.id,
+      matchStrategy: adapter.matchStrategy,
       dryRun: options.dryRun,
       logPrefix,
     });
 
-    const adapter = await getAdapter(supplier);
     const maxPages = options.maxPagesPerCategory ?? defaultMaxPages(supplier);
     const delayMs = supplier === "tambasa" ? safeTambasaDelay() : 300;
 

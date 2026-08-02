@@ -44,6 +44,8 @@ export function isPriceGated(html: string): boolean {
 export class TambasaAdapter implements SupplierAdapter {
   readonly key = "tambasa" as const;
   readonly displayName = "Tambasa";
+  /** products.sku guarda o código da Tambasa, com zeros à esquerda. */
+  readonly matchStrategy = "sku" as const;
 
   private readonly config: TambasaConfig;
   private readonly http: AxiosInstance;

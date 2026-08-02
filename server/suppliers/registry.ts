@@ -2,17 +2,19 @@ import { SUPPLIER_KEYS, type SupplierAdapter, type SupplierKey } from "./types";
 
 export const SUPPLIER_META: Record<
   SupplierKey,
-  { displayName: string; website: string; competitorName: string }
+  { displayName: string; website: string; clientName: string }
 > = {
   tambasa: {
     displayName: "Tambasa",
     website: "https://tambasa.com",
-    competitorName: "Tambasa",
+    // Nome da linha em `clients` (Tambasa = #5, Bartofil = #4 no banco de teste).
+    // A busca é por nome, não por id, para não fixar id de ambiente no código.
+    clientName: "Tambasa",
   },
   bartofil: {
     displayName: "Bartofil",
     website: "https://www.bartofil.com.br",
-    competitorName: "Bartofil",
+    clientName: "Bartofil",
   },
 };
 

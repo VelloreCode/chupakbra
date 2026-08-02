@@ -149,11 +149,15 @@ export interface IStorage {
   createPriceMonitoringHistory(history: InsertPriceMonitoringHistory): Promise<PriceMonitoringHistory>;
 
   // Supplier sync (Tambasa / Bartofil)
-  getOrCreateCompetitorByName(name: string, website?: string): Promise<Competitor>;
-  findProductBySupplierCode(competitorId: number, code: string): Promise<Product | undefined>;
-  upsertCompetitorPrice(input: {
+  getClientByName(name: string): Promise<Client | undefined>;
+  findProductBySupplierCode(
+    clientId: number,
+    code: string,
+    strategy: "sku" | "source-url",
+  ): Promise<Product | undefined>;
+  upsertSupplierPrice(input: {
     productId: number;
-    competitorId: number;
+    clientId: number;
     price: string;
     isAvailable?: boolean;
   }): Promise<Price>;
@@ -774,86 +778,88 @@ export class DatabaseStorage implements IStorage {
   // Supplier sync (Tambasa / Bartofil)
   // ---------------------------------------------------------------------------
 
-  async getOrCreateCompetitorByName(name: string, website?: string): Promise<Competitor> {
-    const [existing] = await db
-      .select()
-      .from(competitors)
-      .where(ilike(competitors.name, name))
-      .limit(1);
-
-    if (existing) return existing;
-
-    const [created] = await db
-      .insert(competitors)
-      .values({ name, website: website ?? null })
-      .returning();
-    return created;
+  async getClientByName(name: string): Promise<Client | undefined> {
+    const [found] = await db.select().from(clients).where(ilike(clients.name, name)).limit(1);
+    return found;
   }
 
   /**
-   * Casa o código do portal com um produto já cadastrado deste concorrente.
+   * Casa o código do portal com um produto já cadastrado deste fornecedor.
    * Nunca cria produto — a automação só atualiza o que já existe.
    *
-   * Tenta, nesta ordem: sku, brandSku e (fallback) sourceUrl contendo o código.
-   * Compara o código como veio e sem zeros à esquerda, porque a Tambasa exibe
-   * com padding ("017571") e a Bartofil não ("17571").
+   * A chave muda por fornecedor, e isso foi conferido contra os dados reais:
+   *
+   *   Tambasa  (`sku`)        products.sku guarda o código do portal com os
+   *                           zeros à esquerda ("017392").
+   *   Bartofil (`source-url`) products.sku guarda o código do FABRICANTE
+   *                           ("47.43-bartofil"); o código do portal só existe
+   *                           no fim da source_url (".../chave-grifo-...-94732").
+   *
+   * A estratégia define a chave primária; a outra fica como desempate, porque
+   * cadastro manual às vezes foge do padrão.
    */
-  async findProductBySupplierCode(competitorId: number, code: string): Promise<Product | undefined> {
+  async findProductBySupplierCode(
+    clientId: number,
+    code: string,
+    strategy: "sku" | "source-url",
+  ): Promise<Product | undefined> {
     const raw = code.trim();
     if (!raw) return undefined;
 
+    // A Tambasa exibe com padding ("017571") e a Bartofil não ("17571").
     const variants = Array.from(new Set([raw, raw.replace(/^0+/, "")])).filter(Boolean);
-    if (variants.length === 0) return undefined;
 
-    const [byCode] = await db
-      .select()
-      .from(products)
-      .where(
-        and(
-          eq(products.competitorId, competitorId),
-          or(inArray(products.sku, variants), inArray(products.brandSku, variants)),
-        ),
-      )
-      .limit(1);
+    const bySku = async () => {
+      const [found] = await db
+        .select()
+        .from(products)
+        .where(
+          and(
+            eq(products.clientId, clientId),
+            or(inArray(products.sku, variants), inArray(products.brandSku, variants)),
+          ),
+        )
+        .limit(1);
+      return found;
+    };
 
-    if (byCode) return byCode;
+    // Sufixo, não "contém": `%-94732` evita casar 94732 com o produto 194732.
+    const byUrl = async () => {
+      const [found] = await db
+        .select()
+        .from(products)
+        .where(
+          and(
+            eq(products.clientId, clientId),
+            isNotNull(products.sourceUrl),
+            or(...variants.map((v) => like(products.sourceUrl, `%-${v}`))),
+          ),
+        )
+        .limit(1);
+      return found;
+    };
 
-    const [byUrl] = await db
-      .select()
-      .from(products)
-      .where(
-        and(
-          eq(products.competitorId, competitorId),
-          isNotNull(products.sourceUrl),
-          or(...variants.map((v) => like(products.sourceUrl, `%${v}%`))),
-        ),
-      )
-      .limit(1);
-
-    return byUrl;
+    return strategy === "sku"
+      ? ((await bySku()) ?? (await byUrl()))
+      : ((await byUrl()) ?? (await bySku()));
   }
 
   /**
-   * Grava o preço do concorrente com read-then-write.
+   * Grava o preço do fornecedor com read-then-write.
    *
    * Deliberadamente NÃO usa onConflictDoUpdate: não existe unique index em
-   * (product_id, competitor_id) — é exatamente o que quebra `bulkUpsertPrices`.
+   * (product_id, client_id) — é exatamente o que quebra `bulkUpsertPrices`.
    */
-  async upsertCompetitorPrice(input: {
+  async upsertSupplierPrice(input: {
     productId: number;
-    competitorId: number;
+    clientId: number;
     price: string;
     isAvailable?: boolean;
   }): Promise<Price> {
     const [existing] = await db
       .select()
       .from(prices)
-      .where(
-        and(
-          eq(prices.productId, input.productId),
-          eq(prices.competitorId, input.competitorId),
-        ),
-      )
+      .where(and(eq(prices.productId, input.productId), eq(prices.clientId, input.clientId)))
       .limit(1);
 
     const now = new Date();
@@ -864,7 +870,6 @@ export class DatabaseStorage implements IStorage {
         .set({
           price: input.price,
           isAvailable: input.isAvailable ?? true,
-          sourceType: "competitor",
           lastUpdated: now,
           updatedAt: now,
         })
@@ -877,9 +882,11 @@ export class DatabaseStorage implements IStorage {
       .insert(prices)
       .values({
         productId: input.productId,
-        competitorId: input.competitorId,
-        clientId: null,
-        sourceType: "competitor",
+        clientId: input.clientId,
+        // "client" acompanha o que já existe: os produtos de fornecedor têm
+        // source_type='client' e a distinção de concorrente vive em
+        // products.is_competitor.
+        sourceType: "client",
         price: input.price,
         discount: "0",
         isAvailable: input.isAvailable ?? true,

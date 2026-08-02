@@ -91,6 +91,8 @@ function toNumber(value: string | number | null | undefined): number | null {
 export class BartofilAdapter implements SupplierAdapter {
   readonly key = "bartofil" as const;
   readonly displayName = "Bartofil";
+  /** products.sku é o código do fabricante; o da Bartofil só está na source_url. */
+  readonly matchStrategy = "source-url" as const;
 
   private readonly config: BartofilConfig;
   private readonly http: AxiosInstance;

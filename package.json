@@ -5,6 +5,9 @@
   "license": "MIT",
   "scripts": {
     "dev": "NODE_ENV=development tsx server/index.ts",
+    "dev:local": "tsx --env-file=.env server/index.ts",
+    "suppliers": "tsx --env-file=.env server/suppliers/cli.ts",
+    "db:studio": "drizzle-kit studio",
     "build": "vite build && esbuild server/index.ts --platform=node --packages=external --external:./vite --bundle --format=esm --outdir=dist",
     "start": "NODE_ENV=production node dist/index.js",
     "check": "tsc",

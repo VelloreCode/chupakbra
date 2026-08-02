@@ -79,9 +79,17 @@ export interface SyncCtx {
   onError?: (code: SyncErrorCode, message: string) => void;
 }
 
+/**
+ * Como o código do portal é encontrado no nosso banco. Difere por fornecedor:
+ * a Tambasa guarda o código no `sku`, a Bartofil só no fim da `source_url`
+ * (o `sku` dela é o código do fabricante).
+ */
+export type MatchStrategy = "sku" | "source-url";
+
 export interface SupplierAdapter {
   readonly key: SupplierKey;
   readonly displayName: string;
+  readonly matchStrategy: MatchStrategy;
   /** Descobre a árvore de categorias do portal (para a tela de seleção). */
   listCategories(): Promise<SupplierCategoryRef[]>;
   /**
