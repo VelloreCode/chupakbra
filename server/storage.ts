@@ -654,11 +654,16 @@ export class DatabaseStorage implements IStorage {
   }
 
   async updateProductPricesFromUrl(): Promise<void> {
-    // Get all products with sourceUrl (URL-based products)
+    // Produtos com URL de origem de verdade.
+    //
+    // O filtro precisa excluir string vazia, não só NULL: os 475 produtos
+    // master têm source_url = '', que passa em IS NOT NULL. Sem isso, cada
+    // execução tentava raspar uma URL em branco para todos eles e gravava 475
+    // falhas — a maior parte do lixo em price_monitoring_history.
     const urlProducts = await db
       .select()
       .from(products)
-      .where(isNotNull(products.sourceUrl));
+      .where(and(isNotNull(products.sourceUrl), ne(products.sourceUrl, "")));
 
     console.log(`[PRICE MONITOR] Found ${urlProducts.length} URL-based products to update`);
 
