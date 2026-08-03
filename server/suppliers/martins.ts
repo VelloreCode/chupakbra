@@ -36,18 +36,22 @@ const POR_PAGINA = 12;
 const LOTE_PRECO = 50;
 
 /**
- * De onde tirar o preço. A resposta traz as duas fontes:
- *   'marketplace' vendedores terceiros (lstPrecoSeller) — o que foi pedido,
- *                 mas com cobertura baixa: na amostra medida, só 1 de 12
- *                 produtos tinha oferta válida.
- *   'martins'     preço do próprio Martins (resultado[].precos[]) — cobertura
- *                 total.
- * Trocar é mudar MARTINS_PRICE_SOURCE no ambiente.
+ * De onde tirar o preço. A mesma resposta traz as duas fontes:
+ *
+ *   'martins'      preço do próprio Martins (resultado[].precos[]). PADRÃO.
+ *   'marketplace'  melhor oferta de vendedor terceiro (lstPrecoSeller).
+ *
+ * O padrão é 'martins' por cobertura, medida na categoria Ferramentas Manuais
+ * em 03/08/2026: 23 de 24 produtos com preço (96%) contra 3 de 24 (13%) pelo
+ * marketplace — as ofertas de terceiros vêm majoritariamente com estoque 0 e
+ * blocked=1. Monitorar pelo marketplace deixaria a comparação quase vazia.
+ *
+ * Para usar o marketplace: MARTINS_PRICE_SOURCE=marketplace.
  */
 type FontePreco = "marketplace" | "martins";
 
 function getFontePreco(): FontePreco {
-  return process.env.MARTINS_PRICE_SOURCE === "martins" ? "martins" : "marketplace";
+  return process.env.MARTINS_PRICE_SOURCE === "marketplace" ? "marketplace" : "martins";
 }
 
 // ---------------------------------------------------------------------------
