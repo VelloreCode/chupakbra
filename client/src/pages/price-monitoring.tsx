@@ -100,11 +100,16 @@ export default function PriceMonitoring() {
   });
 
   // Get master products with competitors for comparison
+  //
+  // competitor-brands: a Comparação Master confronta o produto Foxlux/Famastil
+  // da Vellore com equivalentes de OUTRAS marcas. Produto da mesma marca em
+  // outro vendedor não é concorrente e sai desta tela — ele aparece na
+  // Comparação de Preço.
   const { data: masterProductsWithCompetitors } = useQuery({
-    queryKey: ["/api/products/masters-with-competitors"],
+    queryKey: ["/api/products/masters-with-competitors", "competitor-brands"],
     enabled: isAuthenticated && permissions?.canAccessMonitoring,
     queryFn: async () => {
-      const response = await fetch('/api/products/masters-with-competitors', {
+      const response = await fetch('/api/products/masters-with-competitors?brandScope=competitor-brands', {
         credentials: 'include'
       });
       if (!response.ok) {

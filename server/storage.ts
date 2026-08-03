@@ -38,6 +38,10 @@ import {
   supplierSyncRuns,
   type SupplierSyncRun,
   type InsertSupplierSyncRun,
+  ownBrands,
+  type OwnBrand,
+  type InsertOwnBrand,
+  normalizeBrand,
 } from "@shared/schema";
 import { db } from "./db";
 import { eq, sql, desc, asc, and, or, ilike, count, isNull, like, isNotNull, ne, gte, lte, inArray } from "drizzle-orm";
@@ -58,6 +62,15 @@ export interface IStorage {
   getDistinctManufacturers(): Promise<string[]>;
   getOrCreateCategoryByName(name: string): Promise<Category>;
   setProductCategoryIfEmpty(productId: number, categoryId: number): Promise<boolean>;
+
+  // Marcas próprias — definem o que é (e o que não é) concorrente
+  getOwnBrands(includeInactive?: boolean): Promise<OwnBrand[]>;
+  createOwnBrand(brand: InsertOwnBrand): Promise<OwnBrand>;
+  updateOwnBrand(id: number, patch: Partial<InsertOwnBrand>): Promise<OwnBrand | undefined>;
+  deleteOwnBrand(id: number): Promise<void>;
+  isOwnBrand(manufacturer: string | null | undefined): Promise<boolean>;
+  deriveIsCompetitor(manufacturer: string | null | undefined): Promise<boolean>;
+  recomputeCompetitorFlags(): Promise<{ updated: number; ownBrand: number; competitor: number }>;
   getCategory(id: number): Promise<Category | undefined>;
   createCategory(category: InsertCategory): Promise<Category>;
   updateCategory(id: number, category: Partial<InsertCategory>): Promise<Category>;
@@ -439,6 +452,110 @@ export class DatabaseStorage implements IStorage {
   // Category operations
   async getCategories(): Promise<Category[]> {
     return await db.select().from(categories).orderBy(categories.name);
+  }
+
+  // ---------------------------------------------------------------------------
+  // Marcas próprias
+  // ---------------------------------------------------------------------------
+
+  async getOwnBrands(includeInactive = false): Promise<OwnBrand[]> {
+    const base = db.select().from(ownBrands);
+    const query = includeInactive ? base : base.where(eq(ownBrands.active, true));
+    return await query.orderBy(asc(ownBrands.name));
+  }
+
+  async createOwnBrand(brand: InsertOwnBrand): Promise<OwnBrand> {
+    const normalizedName = normalizeBrand(brand.name);
+    if (!normalizedName) {
+      throw new Error("Nome de marca inválido");
+    }
+
+    // Reativa em vez de duplicar: a marca pode ter sido desativada antes.
+    const [created] = await db
+      .insert(ownBrands)
+      .values({ name: brand.name.trim(), normalizedName, active: brand.active ?? true })
+      .onConflictDoUpdate({
+        target: ownBrands.normalizedName,
+        set: { name: brand.name.trim(), active: brand.active ?? true, updatedAt: new Date() },
+      })
+      .returning();
+    return created;
+  }
+
+  async updateOwnBrand(id: number, patch: Partial<InsertOwnBrand>): Promise<OwnBrand | undefined> {
+    const values: Record<string, unknown> = { updatedAt: new Date() };
+    if (patch.name !== undefined) {
+      values.name = patch.name.trim();
+      values.normalizedName = normalizeBrand(patch.name);
+    }
+    if (patch.active !== undefined) values.active = patch.active;
+
+    const [updated] = await db
+      .update(ownBrands)
+      .set(values)
+      .where(eq(ownBrands.id, id))
+      .returning();
+    return updated;
+  }
+
+  async deleteOwnBrand(id: number): Promise<void> {
+    await db.delete(ownBrands).where(eq(ownBrands.id, id));
+  }
+
+  async isOwnBrand(manufacturer: string | null | undefined): Promise<boolean> {
+    const normalized = normalizeBrand(manufacturer);
+    if (!normalized) return false; // sem marca não há como afirmar que é nossa
+
+    const [found] = await db
+      .select({ id: ownBrands.id })
+      .from(ownBrands)
+      .where(and(eq(ownBrands.normalizedName, normalized), eq(ownBrands.active, true)))
+      .limit(1);
+    return Boolean(found);
+  }
+
+  /** Regra central: concorrente é tudo que NÃO é marca própria. */
+  async deriveIsCompetitor(manufacturer: string | null | undefined): Promise<boolean> {
+    return !(await this.isOwnBrand(manufacturer));
+  }
+
+  /**
+   * Reaplica a regra a todo o catálogo. Necessário depois de mexer em
+   * own_brands, e útil como conserto se algum caminho de escrita esquecer de
+   * derivar a flag.
+   *
+   * A normalização aqui é a versão SQL de `normalizeBrand` (shared/schema.ts).
+   * As duas precisam concordar — o índice funcional criado em
+   * sql/own-brands.sql usa exatamente esta expressão.
+   */
+  async recomputeCompetitorFlags(): Promise<{ updated: number; ownBrand: number; competitor: number }> {
+    const expected = sql`NOT EXISTS (
+      SELECT 1 FROM ${ownBrands} b
+       WHERE b.active
+         AND b.normalized_name =
+             regexp_replace(lower(btrim(COALESCE(${products.manufacturer}, ''))), '^marca:\\s*', '')
+    )`;
+
+    // Só toca em linha que realmente muda: reescrever tudo carimbaria
+    // updated_at em 10 mil produtos a cada execução.
+    const updated = await db
+      .update(products)
+      .set({ isCompetitor: expected, updatedAt: new Date() })
+      .where(sql`${products.isCompetitor} IS DISTINCT FROM ${expected}`)
+      .returning({ id: products.id });
+
+    const [totals] = await db
+      .select({
+        ownBrand: sql<number>`COUNT(*) FILTER (WHERE NOT ${products.isCompetitor})::int`,
+        competitor: sql<number>`COUNT(*) FILTER (WHERE ${products.isCompetitor})::int`,
+      })
+      .from(products);
+
+    return {
+      updated: updated.length,
+      ownBrand: Number(totals?.ownBrand ?? 0),
+      competitor: Number(totals?.competitor ?? 0),
+    };
   }
 
   /**
@@ -1031,7 +1148,32 @@ export class DatabaseStorage implements IStorage {
     return await query.orderBy(desc(supplierSyncRuns.startedAt)).limit(limit);
   }
 
-  async getMasterProductsWithCompetitors(specificMasterId?: number, competitorClientId?: number): Promise<Array<{
+  /**
+   * Produtos master (referência) com os equivalentes usados na comparação.
+   *
+   * `brandScope` decide o que entra do outro lado, e as duas telas pedem coisas
+   * diferentes:
+   *
+   *   'competitor-brands'  Monitoramento URL / Comparação Master.
+   *                        Equivalentes de OUTRAS marcas — nossa furadeira
+   *                        Foxlux contra a furadeira de um concorrente.
+   *
+   *   'own-brand'          Comparação de Preço.
+   *                        O MESMO produto de marca própria em outros
+   *                        vendedores — nosso Foxlux na Vellore contra o mesmo
+   *                        Foxlux na Tambasa, Bartofil, Martins.
+   *
+   *   'all'                Comportamento anterior. Mantido porque outras telas
+   *                        e o relatório ainda chamam sem escopo.
+   *
+   * O master é sempre restrito a marca própria: comparar partindo de um produto
+   * de terceiro inverteria o sentido do relatório.
+   */
+  async getMasterProductsWithCompetitors(
+    specificMasterId?: number,
+    competitorClientId?: number,
+    brandScope: 'all' | 'own-brand' | 'competitor-brands' = 'all',
+  ): Promise<Array<{
     id: number;
     name: string;
     basePrice: string;
@@ -1060,6 +1202,12 @@ export class DatabaseStorage implements IStorage {
       eq(products.isMaster, true),
       isNotNull(products.sourceUrl)
     ];
+
+    // Master é sempre marca própria. Com escopo definido a regra é explícita;
+    // em 'all' fica como estava, para não mudar telas que ainda não migraram.
+    if (brandScope !== 'all') {
+      masterConditions.push(eq(products.isCompetitor, false));
+    }
 
     // If specific master ID requested, filter for it
     if (specificMasterId) {
@@ -1098,10 +1246,18 @@ export class DatabaseStorage implements IStorage {
     
     if (masterIds.length > 0) {
       let competitorConditions = [inArray(products.masterProductId, masterIds)];
-      
+
       // Add client filter for competitors if specified
       if (competitorClientId) {
         competitorConditions.push(eq(products.clientId, competitorClientId));
+      }
+
+      // is_competitor já é derivado da marca, então filtrar por ele é o mesmo
+      // que filtrar por marca própria — sem repetir a normalização aqui.
+      if (brandScope === 'competitor-brands') {
+        competitorConditions.push(eq(products.isCompetitor, true));
+      } else if (brandScope === 'own-brand') {
+        competitorConditions.push(eq(products.isCompetitor, false));
       }
       
       competitors = await db
@@ -1352,7 +1508,14 @@ export class DatabaseStorage implements IStorage {
   }
 
   async createProduct(product: InsertProduct): Promise<Product> {
-    const [newProduct] = await db.insert(products).values(product).returning();
+    // is_competitor é derivado da marca, não informado por quem chama: se o
+    // caller pudesse decidir, cada caminho de escrita (upload, sync, tela)
+    // teria a própria versão da regra e elas divergiriam.
+    const isCompetitor = await this.deriveIsCompetitor(product.manufacturer);
+    const [newProduct] = await db
+      .insert(products)
+      .values({ ...product, isCompetitor })
+      .returning();
     return newProduct;
   }
 
@@ -1375,7 +1538,13 @@ export class DatabaseStorage implements IStorage {
         delete updateData[key];
       }
     });
-    
+
+    // Marca mudou => a classificação de concorrente muda junto. Recalcular aqui
+    // evita que a flag fique presa no valor antigo até o próximo recomputo geral.
+    if (updateData.manufacturer !== undefined) {
+      updateData.isCompetitor = await this.deriveIsCompetitor(updateData.manufacturer);
+    }
+
     console.log('Updating product with data:', updateData);
     
     // Check if basePrice is being updated to create price history

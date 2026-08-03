@@ -1094,8 +1094,20 @@ export async function registerRoutes(app: Express): Promise<Server> {
       const competitorClientId = req.query.competitorClientId ? parseInt(req.query.competitorClientId as string) : undefined;
       console.log(`[PERFORMANCE] Fetching masters with competitors${specificMasterId ? ` for specific master ID: ${specificMasterId}` : ' (all masters)'}${competitorClientId ? ` filtered by competitor client ID: ${competitorClientId}` : ''}`);
       
+      // 'competitor-brands' = comparação contra marcas de terceiros (Monitoramento).
+      // 'own-brand'         = mesmo produto nosso em outros vendedores (Comparação de Preço).
+      const brandScope = ['all', 'own-brand', 'competitor-brands'].includes(
+        req.query.brandScope as string,
+      )
+        ? (req.query.brandScope as 'all' | 'own-brand' | 'competitor-brands')
+        : 'all';
+
       const startTime = Date.now();
-      const mastersWithCompetitors = await storage.getMasterProductsWithCompetitors(specificMasterId, competitorClientId);
+      const mastersWithCompetitors = await storage.getMasterProductsWithCompetitors(
+        specificMasterId,
+        competitorClientId,
+        brandScope,
+      );
       const duration = Date.now() - startTime;
       
       console.log(`[PERFORMANCE] Query completed in ${duration}ms, returned ${mastersWithCompetitors.length} masters`);
@@ -1267,6 +1279,99 @@ export async function registerRoutes(app: Express): Promise<Server> {
     } catch (error) {
       console.error("Error fetching products:", error);
       res.status(500).json({ message: "Failed to fetch products" });
+    }
+  });
+
+  // ===========================================================================
+  // Marcas próprias — definem o que é concorrente
+  // ===========================================================================
+
+  app.get("/api/own-brands", authenticate, async (req, res) => {
+    try {
+      const includeInactive = req.query.includeInactive === "true";
+      res.json(await storage.getOwnBrands(includeInactive));
+    } catch (error) {
+      console.error("Error fetching own brands:", error);
+      res.status(500).json({ message: "Failed to fetch own brands" });
+    }
+  });
+
+  // Criar marca própria reclassifica o catálogo: produtos dessa marca deixam
+  // de ser concorrentes na mesma hora, sem passo manual.
+  app.post("/api/own-brands", authenticate, async (req, res) => {
+    try {
+      const body = z.object({
+        name: z.string().min(1),
+        active: z.boolean().optional(),
+      }).parse(req.body ?? {});
+
+      const brand = await storage.createOwnBrand(body);
+      const recompute = await storage.recomputeCompetitorFlags();
+      res.status(201).json({ brand, recompute });
+    } catch (error) {
+      if (error instanceof z.ZodError) {
+        return res.status(400).json({ message: "Nome da marca é obrigatório" });
+      }
+      console.error("Error creating own brand:", error);
+      res.status(500).json({ message: "Failed to create own brand" });
+    }
+  });
+
+  app.patch("/api/own-brands/:id", authenticate, async (req, res) => {
+    try {
+      let id: number;
+      try {
+        id = validateId(req.params.id, "ID da marca");
+      } catch {
+        return res.status(400).json({ message: "ID inválido" });
+      }
+
+      const body = z.object({
+        name: z.string().min(1).optional(),
+        active: z.boolean().optional(),
+      }).parse(req.body ?? {});
+
+      const brand = await storage.updateOwnBrand(id, body);
+      if (!brand) return res.status(404).json({ message: "Marca não encontrada" });
+
+      const recompute = await storage.recomputeCompetitorFlags();
+      res.json({ brand, recompute });
+    } catch (error) {
+      if (error instanceof z.ZodError) {
+        return res.status(400).json({ message: "Parâmetros inválidos" });
+      }
+      console.error("Error updating own brand:", error);
+      res.status(500).json({ message: "Failed to update own brand" });
+    }
+  });
+
+  app.delete("/api/own-brands/:id", authenticate, async (req, res) => {
+    try {
+      let id: number;
+      try {
+        id = validateId(req.params.id, "ID da marca");
+      } catch {
+        return res.status(400).json({ message: "ID inválido" });
+      }
+
+      await storage.deleteOwnBrand(id);
+      // Remover marca própria devolve os produtos dela para concorrentes.
+      const recompute = await storage.recomputeCompetitorFlags();
+      res.json({ deleted: true, recompute });
+    } catch (error) {
+      console.error("Error deleting own brand:", error);
+      res.status(500).json({ message: "Failed to delete own brand" });
+    }
+  });
+
+  // Conserto manual, para o caso de algum caminho de escrita ter deixado a
+  // flag desatualizada. Idempotente.
+  app.post("/api/own-brands/recompute", authenticate, async (_req, res) => {
+    try {
+      res.json(await storage.recomputeCompetitorFlags());
+    } catch (error) {
+      console.error("Error recomputing competitor flags:", error);
+      res.status(500).json({ message: "Failed to recompute competitor flags" });
     }
   });
 
@@ -1731,7 +1836,10 @@ export async function registerRoutes(app: Express): Promise<Server> {
               matchGroup: (row as any)['grupo_match'] || (row as any)['match_group'] || '',
               status: 'active',
               sourceType: 'client',
-              isCompetitor: ((row as any)['is_competitor'] === 'sim' || (row as any)['is_competitor'] === 'true'),
+              // is_competitor da planilha é ignorado de propósito: a regra
+              // agora vem da marca (own_brands) e é derivada em storage.
+              // Aceitar o valor da planilha reintroduziria classificação
+              // manual divergente da regra.
               isMaster: ((row as any)['is_master'] === 'sim' || (row as any)['is_master'] === 'true'),
               masterProductId: parseInt((row as any)['master_product_id']) || null,
             };

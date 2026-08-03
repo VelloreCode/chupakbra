@@ -173,6 +173,30 @@ export const reportsHistory = pgTable("reports_history", {
   createdAt: timestamp("created_at").defaultNow(),
 });
 
+// Own Brands table
+//
+// Marcas próprias do grupo (Foxlux, Famastil). É o que separa "produto nosso"
+// de "produto concorrente": produto cuja marca está aqui NÃO é concorrente;
+// qualquer outra marca é.
+//
+// Tabela em vez de constante no código para a regra crescer sem deploy — o
+// pedido era justamente incluir novas marcas sem refatoração.
+export const ownBrands = pgTable("own_brands", {
+  id: serial("id").primaryKey(),
+  // Como a marca é exibida.
+  name: varchar("name", { length: 255 }).notNull(),
+  // Forma canônica usada na comparação: minúscula, sem espaço nas pontas e sem
+  // o prefixo "Marca: " que alguns scrapers gravaram junto. É o que permite
+  // "FOXLUX", "Foxlux" e "Marca: FOXLUX" caírem no mesmo lugar.
+  normalizedName: varchar("normalized_name", { length: 255 }).notNull(),
+  // Desativar em vez de apagar preserva o histórico da regra.
+  active: boolean("active").notNull().default(true),
+  createdAt: timestamp("created_at").defaultNow(),
+  updatedAt: timestamp("updated_at").defaultNow(),
+}, (table) => [
+  uniqueIndex("own_brands_normalized_uq").on(table.normalizedName),
+]);
+
 // Supplier Categories table
 // Categorias dos portais dos fornecedores (Tambasa, Bartofil) que o usuário marca
 // para monitorar. `enabled` nasce false: a seleção é opt-in pela tela.
@@ -392,6 +416,15 @@ export const insertSupplierCategorySchema = createInsertSchema(supplierCategorie
   supplier: z.enum(["tambasa", "bartofil"]),
 });
 
+export const insertOwnBrandSchema = createInsertSchema(ownBrands).omit({
+  id: true,
+  createdAt: true,
+  updatedAt: true,
+  normalizedName: true, // derivado de `name` no storage, nunca informado pelo cliente
+}).extend({
+  name: z.string().min(1, "Nome da marca é obrigatório"),
+});
+
 export const insertSupplierSyncRunSchema = createInsertSchema(supplierSyncRuns).omit({
   id: true,
   startedAt: true,
@@ -429,3 +462,24 @@ export type InsertSupplierCategory = z.infer<typeof insertSupplierCategorySchema
 export type SupplierCategory = typeof supplierCategories.$inferSelect;
 export type InsertSupplierSyncRun = z.infer<typeof insertSupplierSyncRunSchema>;
 export type SupplierSyncRun = typeof supplierSyncRuns.$inferSelect;
+export type InsertOwnBrand = z.infer<typeof insertOwnBrandSchema>;
+export type OwnBrand = typeof ownBrands.$inferSelect;
+
+/**
+ * Forma canônica de uma marca, usada para decidir se é marca própria.
+ *
+ * Os dados reais trazem "Foxlux", "FOXLUX" e "Marca: FOXLUX" para a mesma
+ * marca — comparar literalmente classificaria errado centenas de produtos.
+ *
+ * ATENÇÃO: há uma versão equivalente em SQL dentro de
+ * `recomputeCompetitorFlags` (server/storage.ts), porque o recomputo em massa
+ * roda no banco. Se mudar a regra aqui, mude lá também.
+ */
+export function normalizeBrand(value: string | null | undefined): string {
+  if (!value) return "";
+  return value
+    .trim()
+    .toLowerCase()
+    .replace(/^marca:\s*/, "")
+    .trim();
+}

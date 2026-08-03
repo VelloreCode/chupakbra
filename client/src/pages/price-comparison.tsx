@@ -64,16 +64,22 @@ export default function PriceComparison() {
   });
 
   const { data: comparisons, isLoading: comparisonsLoading, error: comparisonsError } = useQuery({
-    queryKey: productId ? ["/api/products/masters-with-competitors", productId, selectedClient] : ["/api/products/masters-with-competitors", selectedClient],
+    queryKey: productId
+      ? ["/api/products/masters-with-competitors", "own-brand", productId, selectedClient]
+      : ["/api/products/masters-with-competitors", "own-brand", selectedClient],
     queryFn: ({ queryKey }) => {
-      let url = productId ? `/api/products/masters-with-competitors?masterId=${productId}` : "/api/products/masters-with-competitors";
-      
+      // own-brand: esta tela compara o MESMO produto Foxlux/Famastil entre
+      // vendedores (Vellore x Tambasa x Bartofil x Martins), não contra
+      // produtos de marcas concorrentes.
+      let url = productId
+        ? `/api/products/masters-with-competitors?brandScope=own-brand&masterId=${productId}`
+        : "/api/products/masters-with-competitors?brandScope=own-brand";
+
       // Add client filter for competitors if selected
       if (selectedClient !== "all") {
-        const separator = url.includes('?') ? '&' : '?';
-        url += `${separator}competitorClientId=${selectedClient}`;
+        url += `&competitorClientId=${selectedClient}`;
       }
-      
+
       return fetch(url, { credentials: 'include' }).then(res => res.json());
     },
     enabled: isAuthenticated && isInitialized,
