@@ -91,6 +91,10 @@ export const products = pgTable("products", {
   matchGroup: varchar("match_group", { length: 100 }), // Grupo de produtos equivalentes
   brandSku: varchar("brand_sku", { length: 100 }), // SKU da sua marca
   sourceUrl: varchar("source_url", { length: 1000 }), // URL de origem do produto
+  // Código de barras. É o sinal mais forte de equivalência entre produtos de
+  // vendedores diferentes: EAN igual é o mesmo item físico, sem ambiguidade.
+  // Martins e Bartofil já devolvem esse dado nas APIs.
+  ean: varchar("ean", { length: 20 }),
   isMaster: boolean("is_master").notNull().default(false), // Produto master ou de monitoramento
   masterProductId: integer("master_product_id").references((): any => products.id), // Referência ao produto master
   createdAt: timestamp("created_at").defaultNow(),
@@ -172,6 +176,36 @@ export const reportsHistory = pgTable("reports_history", {
   generatedAt: timestamp("generated_at").defaultNow().notNull(),
   createdAt: timestamp("created_at").defaultNow(),
 });
+
+// Product Match Candidates table
+//
+// Fila de revisão do motor de match. O motor NUNCA aplica correspondência
+// sozinho quando há dúvida: ele grava o candidato com a pontuação e o motivo,
+// e uma pessoa decide.
+//
+// Existe porque os falsos positivos medidos na base atual vieram justamente
+// de match aplicado sem verificação — grupos com cortadores de 115cm e 120cm
+// juntos, variando de R$ 1,41 a R$ 1.290.
+export const productMatchCandidates = pgTable("product_match_candidates", {
+  id: serial("id").primaryKey(),
+  masterProductId: integer("master_product_id").notNull().references(() => products.id, { onDelete: "cascade" }),
+  candidateProductId: integer("candidate_product_id").notNull().references(() => products.id, { onDelete: "cascade" }),
+  // 0 a 100. Acima do limiar de aceite vira sugestão forte; na faixa do meio,
+  // revisão obrigatória; abaixo, descartado e nem gravado.
+  score: integer("score").notNull(),
+  // Como o motor chegou nesse número: quais atributos bateram, quais não.
+  evidence: jsonb("evidence"),
+  // pending | approved | rejected
+  status: varchar("status", { length: 20 }).notNull().default("pending"),
+  reviewedBy: varchar("reviewed_by").references(() => users.id),
+  reviewedAt: timestamp("reviewed_at"),
+  createdAt: timestamp("created_at").defaultNow(),
+  updatedAt: timestamp("updated_at").defaultNow(),
+}, (table) => [
+  // Um par só entra uma vez; reprocessar atualiza em vez de duplicar.
+  uniqueIndex("product_match_candidates_par_uq").on(table.masterProductId, table.candidateProductId),
+  index("product_match_candidates_status_idx").on(table.status),
+]);
 
 // Supplier Sessions table
 //
