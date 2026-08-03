@@ -251,6 +251,11 @@ export class TambasaAdapter implements SupplierAdapter {
       }
       fresh.forEach((item) => seenCodes.add(item.externalCode));
 
+      // Todos os produtos desta página pertencem à categoria varrida — o card
+      // não traz essa informação e a URL da listagem é o único indicador.
+      // Não estamos filtrando por categoria pura, é assim que descobrimos.
+      for (const item of fresh) item.categoryLabel = cat.label;
+
       ctx.onPage?.(page, fresh.length);
       yield fresh;
 

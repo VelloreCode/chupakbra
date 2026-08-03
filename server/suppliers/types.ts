@@ -22,6 +22,13 @@ export interface SupplierProduct {
   isAvailable?: boolean;
   imageUrl?: string;
   productUrl?: string;
+  /**
+   * Categoria à qual o produto pertence no portal — quando o adapter
+   * consegue afirmar. Serve para categorizar automaticamente produtos que
+   * ainda estão sem `category_id`. O writer nunca sobrescreve categoria já
+   * definida, só preenche o vazio.
+   */
+  categoryLabel?: string;
 }
 
 export type SyncErrorCode =

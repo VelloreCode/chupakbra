@@ -44,6 +44,10 @@ const produtoSchema = z.object({
   marca: z.string().nullish(),
   foto_principal: z.string().nullish(),
   url_key: z.string().nullish(),
+  // A API devolve a categoria do produto direto no payload — não é preciso
+  // varrer categoria por categoria para descobrir. Uso nome_categoria em vez
+  // do id porque ele já vem legível.
+  nome_categoria: z.string().nullish(),
   variacoes: z.array(variacaoSchema).nullish(),
 });
 
@@ -415,6 +419,7 @@ export class BartofilAdapter implements SupplierAdapter {
       productUrl: row.url_key
         ? `https://www.bartofil.com.br/${String(row.url_key).split("/").pop()}`
         : undefined,
+      categoryLabel: row.nome_categoria?.trim() || undefined,
     };
   }
 }

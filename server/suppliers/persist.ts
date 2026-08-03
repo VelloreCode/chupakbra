@@ -42,6 +42,12 @@ export class SupplierWriter {
 
   private readonly unmatchedSample: string[] = [];
   private unmatchedTotal = 0;
+  /**
+   * Cache local: uma página de Tambasa traz ~100 produtos da mesma categoria,
+   * e getOrCreateCategoryByName é uma consulta ao banco. Sem cache seriam ~100
+   * lookups desnecessários por página.
+   */
+  private readonly categoryIdCache = new Map<string, number>();
 
   constructor(private readonly options: SupplierWriterOptions) {}
 
@@ -76,6 +82,13 @@ export class SupplierWriter {
     }
 
     this.counters.matched++;
+
+    // Categorização: independente do resultado do preço, se o produto já casou
+    // e o portal informou a categoria, aproveita para preencher category_id
+    // quando estiver vazio. Não sobrescreve categorização manual.
+    if (!this.options.dryRun && item.categoryLabel && product.categoryId == null) {
+      await this.applyCategoryIfEmpty(product.id, item.categoryLabel);
+    }
 
     const newPrice = item.price;
     if (newPrice === null || newPrice === undefined) {
@@ -134,6 +147,22 @@ export class SupplierWriter {
 
     this.counters.updated++;
     return "updated";
+  }
+
+  private async applyCategoryIfEmpty(productId: number, label: string): Promise<void> {
+    const key = label.trim().toLowerCase();
+    if (!key) return;
+
+    let categoryId = this.categoryIdCache.get(key);
+    if (categoryId === undefined) {
+      const category = await storage.getOrCreateCategoryByName(label);
+      categoryId = category.id;
+      this.categoryIdCache.set(key, categoryId);
+    }
+    // storage.setProductCategoryIfEmpty devolve false quando já havia
+    // categoria — comportamento intencional, é aí que a regra "não sobrescreve"
+    // acontece. Nada a logar nesse caso.
+    await storage.setProductCategoryIfEmpty(productId, categoryId);
   }
 
   /**

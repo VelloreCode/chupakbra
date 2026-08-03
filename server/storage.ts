@@ -56,6 +56,8 @@ export interface IStorage {
   // Category operations
   getCategories(): Promise<Category[]>;
   getDistinctManufacturers(): Promise<string[]>;
+  getOrCreateCategoryByName(name: string): Promise<Category>;
+  setProductCategoryIfEmpty(productId: number, categoryId: number): Promise<boolean>;
   getCategory(id: number): Promise<Category | undefined>;
   createCategory(category: InsertCategory): Promise<Category>;
   updateCategory(id: number, category: Partial<InsertCategory>): Promise<Category>;
@@ -437,6 +439,43 @@ export class DatabaseStorage implements IStorage {
   // Category operations
   async getCategories(): Promise<Category[]> {
     return await db.select().from(categories).orderBy(categories.name);
+  }
+
+  /**
+   * Busca categoria por nome (case-insensitive) ou cria se não existir.
+   * Usado pela sincronização de fornecedores para propagar categoria do portal
+   * para produtos que ainda não estão categorizados no nosso banco.
+   */
+  async getOrCreateCategoryByName(name: string): Promise<Category> {
+    const trimmed = name.trim();
+    const [existing] = await db
+      .select()
+      .from(categories)
+      .where(ilike(categories.name, trimmed))
+      .limit(1);
+    if (existing) return existing;
+
+    const [created] = await db
+      .insert(categories)
+      .values({ name: trimmed })
+      .returning();
+    return created;
+  }
+
+  /**
+   * Grava `category_id` apenas se estiver NULL. Retorna true se atualizou.
+   *
+   * Não sobrescrever é regra: se alguém categorizou manualmente (agora ou no
+   * futuro), a sincronização automática do fornecedor não pode reverter isso
+   * silenciosamente na próxima varredura.
+   */
+  async setProductCategoryIfEmpty(productId: number, categoryId: number): Promise<boolean> {
+    const result = await db
+      .update(products)
+      .set({ categoryId, updatedAt: new Date() })
+      .where(and(eq(products.id, productId), isNull(products.categoryId)))
+      .returning({ id: products.id });
+    return result.length > 0;
   }
 
   /**
