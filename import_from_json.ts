@@ -237,8 +237,39 @@ async function importFromJson() {
       // Não foi desabilitado acima por falta de permissão, nada a reverter
     }
 
+    // Reajustar as sequências de id.
+    //
+    // As linhas acima entraram com id explícito, mas as sequências continuam no
+    // valor anterior. Sem este passo, o primeiro INSERT normal da aplicação pede
+    // nextval(), recebe um id já usado e falha com "duplicate key value violates
+    // unique constraint". O erro aparece longe daqui, em qualquer tela que grave
+    // dado, e não parece ter relação com a importação.
+    console.log('5. Reajustando sequências de id...\n');
+
+    await db.execute(sql`
+      DO $$
+      DECLARE r RECORD; maxid BIGINT;
+      BEGIN
+        FOR r IN
+          SELECT c.relname AS tabela, a.attname AS coluna,
+                 pg_get_serial_sequence(c.relname, a.attname) AS seq
+            FROM pg_class c
+            JOIN pg_attribute a ON a.attrelid = c.oid
+           WHERE c.relkind = 'r'
+             AND c.relnamespace = 'public'::regnamespace
+             AND pg_get_serial_sequence(c.relname, a.attname) IS NOT NULL
+        LOOP
+          EXECUTE format('SELECT COALESCE(MAX(%I), 0) FROM %I', r.coluna, r.tabela)
+             INTO maxid;
+          PERFORM setval(r.seq, GREATEST(maxid, 1), maxid > 0);
+        END LOOP;
+      END $$;
+    `);
+
+    console.log('   Sequências ajustadas.\n');
+
     // Verificar contagem
-    console.log('5. Verificando importação...\n');
+    console.log('6. Verificando importação...\n');
     
     const counts = await db.execute(sql`
       SELECT 'products' as tabela, COUNT(*) as registros FROM products
