@@ -1,6 +1,6 @@
 // Contratos compartilhados pelos adapters de fornecedor (Tambasa, Bartofil).
 
-export const SUPPLIER_KEYS = ["tambasa", "bartofil"] as const;
+export const SUPPLIER_KEYS = ["tambasa", "bartofil", "martins"] as const;
 export type SupplierKey = (typeof SUPPLIER_KEYS)[number];
 
 export interface SupplierCategoryRef {
@@ -33,6 +33,7 @@ export interface SupplierProduct {
 
 export type SyncErrorCode =
   | "CONFIG_INVALID"
+  | "SESSION_MISSING"
   | "AUTH_FAILED"
   | "SESSION_EXPIRED"
   | "RATE_LIMITED"

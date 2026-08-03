@@ -851,7 +851,91 @@ export async function registerRoutes(app: Express): Promise<Server> {
   // Fornecedores (Tambasa / Bartofil) — extração automática de preços
   // ===========================================================================
 
-  const supplierKeySchema = z.enum(["tambasa", "bartofil"]);
+  const supplierKeySchema = z.enum(["tambasa", "bartofil", "martins"]);
+
+  // Estado da sessão manual. Nunca devolve o token — só o suficiente para a
+  // tela dizer se está válida e quando foi capturada.
+  app.get("/api/suppliers/:key/session", authenticate, async (req, res) => {
+    try {
+      const key = supplierKeySchema.parse(req.params.key);
+      const s = await storage.getSupplierSession(key);
+      if (!s) return res.json({ capturada: false });
+
+      const { mascararToken } = await import("./suppliers/session-capture");
+      res.json({
+        capturada: true,
+        tokenMascarado: mascararToken(s.accessToken),
+        capturadaEm: s.capturedAt,
+        ultimoSucesso: s.lastOkAt,
+        ultimaFalha: s.lastFailedAt,
+        motivoFalha: s.lastFailureReason,
+        // Falhou depois do último sucesso => precisa recapturar.
+        expirada: Boolean(s.lastFailedAt && (!s.lastOkAt || s.lastFailedAt > s.lastOkAt)),
+      });
+    } catch (error) {
+      if (error instanceof z.ZodError) {
+        return res.status(400).json({ message: "Fornecedor inválido" });
+      }
+      console.error("Error fetching supplier session:", error);
+      res.status(500).json({ message: "Failed to fetch supplier session" });
+    }
+  });
+
+  // Captura a sessão a partir do "Copy as cURL" do DevTools.
+  app.post("/api/suppliers/:key/session", authenticate, async (req, res) => {
+    try {
+      const key = supplierKeySchema.parse(req.params.key);
+      const { curl } = z.object({ curl: z.string().min(20) }).parse(req.body ?? {});
+
+      const { capturarSessaoMartins, CurlInvalidoError, mascararToken } =
+        await import("./suppliers/session-capture");
+
+      let sessao;
+      try {
+        sessao = capturarSessaoMartins(curl);
+      } catch (error) {
+        if (error instanceof CurlInvalidoError) {
+          return res.status(400).json({ message: error.message });
+        }
+        throw error;
+      }
+
+      await storage.saveSupplierSession({
+        supplier: key,
+        accessToken: sessao.accessToken,
+        clientId: sessao.clientId,
+        bodyTemplate: sessao.bodyTemplate,
+      });
+
+      console.log(`[SUPPLIER:${key}] sessão capturada (${sessao.bodyTemplate ? "com" : "sem"} template de corpo)`);
+
+      res.json({
+        capturada: true,
+        tokenMascarado: mascararToken(sessao.accessToken),
+        camposDoTemplate: Object.keys(sessao.bodyTemplate ?? {}).length,
+      });
+    } catch (error) {
+      if (error instanceof z.ZodError) {
+        return res.status(400).json({ message: "Cole o comando cURL completo" });
+      }
+      console.error("Error saving supplier session:", error);
+      res.status(500).json({ message: "Failed to save supplier session" });
+    }
+  });
+
+  app.delete("/api/suppliers/:key/session", authenticate, async (req, res) => {
+    try {
+      const key = supplierKeySchema.parse(req.params.key);
+      await storage.deleteSupplierSession(key);
+      res.json({ deleted: true });
+    } catch (error) {
+      if (error instanceof z.ZodError) {
+        return res.status(400).json({ message: "Fornecedor inválido" });
+      }
+      console.error("Error deleting supplier session:", error);
+      res.status(500).json({ message: "Failed to delete supplier session" });
+    }
+  });
 
   // Lista os fornecedores e se as credenciais estão presentes.
   // Devolve BOOLEANO, nunca o valor: o middleware de log em server/index.ts

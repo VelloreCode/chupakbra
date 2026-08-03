@@ -42,6 +42,9 @@ import {
   type OwnBrand,
   type InsertOwnBrand,
   normalizeBrand,
+  supplierSessions,
+  type SupplierSession,
+  type InsertSupplierSession,
 } from "@shared/schema";
 import { db } from "./db";
 import { eq, sql, desc, asc, and, or, ilike, count, isNull, like, isNotNull, ne, gte, lte, inArray } from "drizzle-orm";
@@ -62,6 +65,12 @@ export interface IStorage {
   getDistinctManufacturers(): Promise<string[]>;
   getOrCreateCategoryByName(name: string): Promise<Category>;
   setProductCategoryIfEmpty(productId: number, categoryId: number): Promise<boolean>;
+
+  // Sessões manuais de fornecedor (Martins: login com 2FA)
+  getSupplierSession(supplier: string): Promise<SupplierSession | undefined>;
+  saveSupplierSession(session: InsertSupplierSession): Promise<SupplierSession>;
+  markSupplierSessionResult(supplier: string, ok: boolean, reason?: string): Promise<void>;
+  deleteSupplierSession(supplier: string): Promise<void>;
 
   // Marcas próprias — definem o que é (e o que não é) concorrente
   getOwnBrands(includeInactive?: boolean): Promise<OwnBrand[]>;
@@ -452,6 +461,59 @@ export class DatabaseStorage implements IStorage {
   // Category operations
   async getCategories(): Promise<Category[]> {
     return await db.select().from(categories).orderBy(categories.name);
+  }
+
+  // ---------------------------------------------------------------------------
+  // Sessões manuais de fornecedor
+  // ---------------------------------------------------------------------------
+
+  async getSupplierSession(supplier: string): Promise<SupplierSession | undefined> {
+    const [found] = await db
+      .select()
+      .from(supplierSessions)
+      .where(eq(supplierSessions.supplier, supplier))
+      .limit(1);
+    return found;
+  }
+
+  /** Capturar de novo substitui a sessão anterior — só existe uma viva por fornecedor. */
+  async saveSupplierSession(session: InsertSupplierSession): Promise<SupplierSession> {
+    const now = new Date();
+    const [saved] = await db
+      .insert(supplierSessions)
+      .values({ ...session, capturedAt: now })
+      .onConflictDoUpdate({
+        target: supplierSessions.supplier,
+        set: {
+          accessToken: session.accessToken,
+          clientId: session.clientId ?? null,
+          bodyTemplate: session.bodyTemplate ?? null,
+          capturedAt: now,
+          // Sessão nova começa sem histórico de falha, senão a tela seguiria
+          // mostrando "expirada" depois de já ter sido renovada.
+          lastFailedAt: null,
+          lastFailureReason: null,
+          updatedAt: now,
+        },
+      })
+      .returning();
+    return saved;
+  }
+
+  async markSupplierSessionResult(supplier: string, ok: boolean, reason?: string): Promise<void> {
+    const now = new Date();
+    await db
+      .update(supplierSessions)
+      .set(
+        ok
+          ? { lastOkAt: now, lastFailedAt: null, lastFailureReason: null, updatedAt: now }
+          : { lastFailedAt: now, lastFailureReason: reason ?? null, updatedAt: now },
+      )
+      .where(eq(supplierSessions.supplier, supplier));
+  }
+
+  async deleteSupplierSession(supplier: string): Promise<void> {
+    await db.delete(supplierSessions).where(eq(supplierSessions.supplier, supplier));
   }
 
   // ---------------------------------------------------------------------------

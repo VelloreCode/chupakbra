@@ -173,6 +173,36 @@ export const reportsHistory = pgTable("reports_history", {
   createdAt: timestamp("created_at").defaultNow(),
 });
 
+// Supplier Sessions table
+//
+// Sessão autenticada de fornecedor que não permite login programático.
+// O caso é o Martins: o login tem 2FA por SMS, então a pessoa autentica no
+// próprio navegador e cola aqui o que foi capturado.
+//
+// Guarda também o corpo da requisição inteiro (bodyTemplate). Não é excesso:
+// a API do Martins recusa (403) um payload remontado — ele carrega 37 campos
+// de contexto do cadastro (região de preço, filial, cidade de entrega), e é
+// justamente isso que faz o preço ser o da conta e da região certas.
+export const supplierSessions = pgTable("supplier_sessions", {
+  id: serial("id").primaryKey(),
+  supplier: varchar("supplier", { length: 30 }).notNull(),
+  // Token de sessão. Sensível: nunca deve sair em resposta de API.
+  accessToken: text("access_token").notNull(),
+  // Identificador público da aplicação, não é segredo.
+  clientId: varchar("client_id", { length: 255 }),
+  bodyTemplate: jsonb("body_template"),
+  capturedAt: timestamp("captured_at").defaultNow().notNull(),
+  // Marcam a saúde da sessão: a UI usa para dizer "expirou, capture de novo".
+  lastOkAt: timestamp("last_ok_at"),
+  lastFailedAt: timestamp("last_failed_at"),
+  lastFailureReason: text("last_failure_reason"),
+  createdAt: timestamp("created_at").defaultNow(),
+  updatedAt: timestamp("updated_at").defaultNow(),
+}, (table) => [
+  // Uma sessão viva por fornecedor; capturar de novo substitui a anterior.
+  uniqueIndex("supplier_sessions_supplier_uq").on(table.supplier),
+]);
+
 // Own Brands table
 //
 // Marcas próprias do grupo (Foxlux, Famastil). É o que separa "produto nosso"
@@ -413,7 +443,14 @@ export const insertSupplierCategorySchema = createInsertSchema(supplierCategorie
   createdAt: true,
   updatedAt: true,
 }).extend({
-  supplier: z.enum(["tambasa", "bartofil"]),
+  supplier: z.enum(["tambasa", "bartofil", "martins"]),
+});
+
+export const insertSupplierSessionSchema = createInsertSchema(supplierSessions).omit({
+  id: true,
+  createdAt: true,
+  updatedAt: true,
+  capturedAt: true,
 });
 
 export const insertOwnBrandSchema = createInsertSchema(ownBrands).omit({
@@ -429,7 +466,7 @@ export const insertSupplierSyncRunSchema = createInsertSchema(supplierSyncRuns).
   id: true,
   startedAt: true,
 }).extend({
-  supplier: z.enum(["tambasa", "bartofil"]),
+  supplier: z.enum(["tambasa", "bartofil", "martins"]),
   status: z.enum(["running", "success", "partial", "failed"]),
   trigger: z.enum(["cron", "manual"]),
 });
@@ -464,6 +501,8 @@ export type InsertSupplierSyncRun = z.infer<typeof insertSupplierSyncRunSchema>;
 export type SupplierSyncRun = typeof supplierSyncRuns.$inferSelect;
 export type InsertOwnBrand = z.infer<typeof insertOwnBrandSchema>;
 export type OwnBrand = typeof ownBrands.$inferSelect;
+export type InsertSupplierSession = z.infer<typeof insertSupplierSessionSchema>;
+export type SupplierSession = typeof supplierSessions.$inferSelect;
 
 /**
  * Forma canônica de uma marca, usada para decidir se é marca própria.

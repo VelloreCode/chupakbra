@@ -147,6 +147,11 @@ export function checkCredentials(key: SupplierKey): { ok: boolean; issue: string
   try {
     if (key === "tambasa") {
       getTambasaCredentials();
+    } else if (key === "martins") {
+      // O Martins não tem credencial em ambiente: a sessão é capturada à mão
+      // (2FA por SMS) e vive em supplier_sessions. Quem responde por ela é a
+      // rota /api/suppliers/:key/session, não esta checagem.
+      return { ok: true, issue: null };
     } else {
       getBartofilConfig();
       getBartofilCredentials();

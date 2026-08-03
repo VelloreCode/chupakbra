@@ -14,7 +14,7 @@ const MAX_PRICE_JUMP_FACTOR = 10;
 /** Quantos códigos não casados guardar como amostra no resumo. */
 const UNMATCHED_SAMPLE_SIZE = 50;
 
-export type WriteOutcome = "updated" | "unchanged" | "unmatched" | "skipped";
+export type WriteOutcome = "updated" | "unchanged" | "unmatched" | "skipped" | "created";
 
 export interface SupplierWriterOptions {
   supplier: SupplierKey;
@@ -27,6 +27,13 @@ export interface SupplierWriterOptions {
   matchStrategy: MatchStrategy;
   dryRun: boolean;
   logPrefix: string;
+  /**
+   * Cadastrar produto que ainda não existe. Falso por padrão — a regra geral é
+   * só atualizar o que já está no catálogo. Verdadeiro para fornecedor que
+   * entrou sem catálogo nenhum (Martins), onde "só atualizar" não casaria nada
+   * e a coleta terminaria vazia parecendo falha.
+   */
+  allowProductCreation?: boolean;
   onSkip?: (code: string, reason: string) => void;
 }
 
@@ -64,15 +71,27 @@ export class SupplierWriter {
       return "skipped";
     }
 
-    const product = await storage.findProductBySupplierCode(
+    let product = await storage.findProductBySupplierCode(
       this.options.clientId,
       code,
       this.options.matchStrategy,
     );
 
-    // Só atualizamos o que já existe: produto desconhecido vira relatório,
-    // para a pessoa decidir importar pelo fluxo de XLSX.
     if (!product) {
+      // Fornecedor autorizado a criar (catálogo vazio) cadastra o produto;
+      // os demais só reportam, para a pessoa decidir importar pelo XLSX.
+      if (this.options.allowProductCreation && item.price !== null && item.price > 0) {
+        if (this.options.dryRun) {
+          this.counters.matched++;
+          this.counters.updated++;
+          return "created";
+        }
+        product = await this.criarProduto(item, code);
+        this.counters.matched++;
+        this.counters.updated++;
+        return "created";
+      }
+
       this.counters.skipped++;
       this.unmatchedTotal++;
       if (this.unmatchedSample.length < UNMATCHED_SAMPLE_SIZE) {
@@ -147,6 +166,32 @@ export class SupplierWriter {
 
     this.counters.updated++;
     return "updated";
+  }
+
+  /**
+   * Cadastra produto novo do fornecedor.
+   *
+   * isCompetitor não é informado: storage.createProduct deriva da marca, que é
+   * a regra única. Passar aqui abriria espaço para divergir dela.
+   */
+  private async criarProduto(item: SupplierProduct, code: string) {
+    const categoryId = item.categoryLabel
+      ? (await storage.getOrCreateCategoryByName(item.categoryLabel)).id
+      : null;
+
+    return await storage.createProduct({
+      sku: code,
+      name: item.name,
+      manufacturer: item.manufacturer,
+      clientId: this.options.clientId,
+      categoryId,
+      basePrice: (item.price ?? 0).toFixed(2),
+      imageUrl: item.imageUrl ?? "",
+      sourceUrl: item.productUrl ?? "",
+      status: "active",
+      sourceType: "client",
+      isMaster: false,
+    } as any);
   }
 
   private async applyCategoryIfEmpty(productId: number, label: string): Promise<void> {

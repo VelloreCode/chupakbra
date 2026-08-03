@@ -16,7 +16,27 @@ export const SUPPLIER_META: Record<
     website: "https://www.bartofil.com.br",
     clientName: "Bartofil",
   },
+  martins: {
+    displayName: "Martins Atacado",
+    website: "https://www.martinsatacado.com.br",
+    clientName: "Martins",
+  },
 };
+
+/**
+ * Fornecedores cujo login não é automatizável (2FA por SMS, no caso do
+ * Martins). A sessão é capturada manualmente e guardada em supplier_sessions.
+ */
+export const SUPPLIERS_WITH_MANUAL_SESSION: readonly SupplierKey[] = ["martins"];
+
+/**
+ * Fornecedores autorizados a cadastrar produto novo durante a sincronização.
+ *
+ * A regra geral é só atualizar o que já existe. O Martins é exceção porque
+ * entrou com catálogo zerado — sem isto a primeira coleta não casaria nada e
+ * terminaria vazia, parecendo falha.
+ */
+export const SUPPLIERS_ALLOWED_TO_CREATE: readonly SupplierKey[] = ["martins"];
 
 /**
  * Import dinâmico de propósito: cada adapter lê as próprias credenciais na
@@ -27,6 +47,10 @@ export async function getAdapter(key: SupplierKey): Promise<SupplierAdapter> {
   if (key === "tambasa") {
     const { TambasaAdapter } = await import("./tambasa");
     return new TambasaAdapter();
+  }
+  if (key === "martins") {
+    const { MartinsAdapter } = await import("./martins");
+    return await MartinsAdapter.create();
   }
   const { BartofilAdapter } = await import("./bartofil");
   return new BartofilAdapter();

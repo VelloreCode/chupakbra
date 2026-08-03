@@ -24,7 +24,17 @@ import {
   Truck,
 } from "lucide-react";
 
-type SupplierKey = "tambasa" | "bartofil";
+type SupplierKey = "tambasa" | "bartofil" | "martins";
+
+interface SessionInfo {
+  capturada: boolean;
+  tokenMascarado?: string;
+  capturadaEm?: string;
+  ultimoSucesso?: string | null;
+  ultimaFalha?: string | null;
+  motivoFalha?: string | null;
+  expirada?: boolean;
+}
 
 interface SyncRun {
   id: number;
@@ -337,10 +347,44 @@ function SupplierCard({
   onToggleCategory,
 }: SupplierCardProps) {
   const { toast } = useToast();
+  const queryClient = useQueryClient();
 
   const { data: categories = [] } = useQuery<SupplierCategory[]>({
     queryKey: [`/api/suppliers/${supplier.key}/categories`],
   });
+
+  // Só o Martins usa sessão manual (login com 2FA por SMS).
+  const usaSessaoManual = supplier.key === "martins";
+  const { data: sessao } = useQuery<SessionInfo>({
+    queryKey: [`/api/suppliers/${supplier.key}/session`],
+    enabled: usaSessaoManual,
+  });
+
+  const [curl, setCurl] = useState("");
+  const [salvandoSessao, setSalvandoSessao] = useState(false);
+
+  const salvarSessao = async () => {
+    setSalvandoSessao(true);
+    try {
+      const r = await apiRequest("POST", `/api/suppliers/${supplier.key}/session`, { curl });
+      const d = await r.json();
+      toast({
+        title: "Sessão capturada",
+        description: `Token ${d.tokenMascarado} · ${d.camposDoTemplate} campos de contexto.`,
+      });
+      setCurl("");
+      queryClient.invalidateQueries({ queryKey: [`/api/suppliers/${supplier.key}/session`] });
+      queryClient.invalidateQueries({ queryKey: ["/api/suppliers"] });
+    } catch (error) {
+      toast({
+        title: "Não foi possível capturar",
+        description: error instanceof Error ? error.message : "Erro desconhecido",
+        variant: "destructive",
+      });
+    } finally {
+      setSalvandoSessao(false);
+    }
+  };
 
   const filtered = useMemo(() => {
     const term = search.trim().toLowerCase();
@@ -433,7 +477,55 @@ function SupplierCard({
       </CardHeader>
 
       <CardContent className="space-y-6">
-        {!supplier.credentialsConfigured && (
+        {usaSessaoManual && (
+          <div
+            className={`rounded-md border p-3 text-sm ${
+              sessao?.capturada && !sessao?.expirada
+                ? "border-green-300 bg-green-50 text-green-900 dark:border-green-800 dark:bg-green-950 dark:text-green-100"
+                : "border-yellow-300 bg-yellow-50 text-yellow-900 dark:border-yellow-800 dark:bg-yellow-950 dark:text-yellow-100"
+            }`}
+          >
+            <strong className="block">
+              {sessao?.capturada && !sessao?.expirada
+                ? "Sessão ativa"
+                : sessao?.expirada
+                  ? "Sessão expirada"
+                  : "Sessão não capturada"}
+            </strong>
+
+            {sessao?.capturada && (
+              <span className="mt-1 block text-xs">
+                Token {sessao.tokenMascarado} · capturada em {formatDateTime(sessao.capturadaEm ?? null)}
+                {sessao.expirada && sessao.motivoFalha && ` · falhou: ${sessao.motivoFalha}`}
+              </span>
+            )}
+
+            <p className="mt-2 text-xs">
+              O login do Martins tem verificação em duas etapas por SMS, então não dá para automatizar.
+              Faça login no navegador, abra o DevTools na aba Rede, clique com o botão direito em uma
+              requisição para <code>produtosBuyBox</code> e escolha <strong>Copy &gt; Copy as cURL</strong>.
+              Cole abaixo.
+            </p>
+
+            <textarea
+              className="mt-2 h-24 w-full rounded border p-2 font-mono text-xs text-gray-900 dark:bg-gray-900 dark:text-gray-100"
+              placeholder="curl 'https://ssd.martins.com.br/b2b-partner/v1/produtosBuyBox' -H '...' --data-raw '...'"
+              value={curl}
+              onChange={(event) => setCurl(event.target.value)}
+            />
+
+            <Button
+              size="sm"
+              className="mt-2"
+              onClick={salvarSessao}
+              disabled={curl.trim().length < 20 || salvandoSessao}
+            >
+              {salvandoSessao ? "Capturando..." : "Salvar sessão"}
+            </Button>
+          </div>
+        )}
+
+        {!usaSessaoManual && !supplier.credentialsConfigured && (
           <div className="rounded-md border border-yellow-300 bg-yellow-50 p-3 text-sm text-yellow-900 dark:border-yellow-800 dark:bg-yellow-950 dark:text-yellow-100">
             <strong className="block">Credenciais não configuradas</strong>
             {supplier.credentialsIssue && (

@@ -6,7 +6,7 @@
 // reaproveitar cookie/JWT é justamente o ponto.
 
 import { storage } from "../storage";
-import { getAdapter, SUPPLIER_META } from "./registry";
+import { getAdapter, SUPPLIER_META, SUPPLIERS_ALLOWED_TO_CREATE } from "./registry";
 import { SupplierWriter } from "./persist";
 import { sleepJitter, errorMessage } from "./util";
 import { getTambasaConfig } from "./config";
@@ -65,7 +65,9 @@ export function getSupplierSyncState(): SupplierSyncState {
 export async function runSupplierSync(options: SyncOptions = {}): Promise<SyncSummary[]> {
   if (state.running) throw new SyncAlreadyRunningError();
 
-  const suppliers = options.suppliers?.length ? options.suppliers : (["tambasa", "bartofil"] as SupplierKey[]);
+  const suppliers = options.suppliers?.length
+    ? options.suppliers
+    : (["tambasa", "bartofil", "martins"] as SupplierKey[]);
   const dryRun = options.dryRun ?? false;
   const trigger = options.trigger ?? "manual";
 
@@ -157,6 +159,7 @@ async function runOneSupplier(
       matchStrategy: adapter.matchStrategy,
       dryRun: options.dryRun,
       logPrefix,
+      allowProductCreation: SUPPLIERS_ALLOWED_TO_CREATE.includes(supplier),
     });
 
     const maxPages = options.maxPagesPerCategory ?? defaultMaxPages(supplier);
