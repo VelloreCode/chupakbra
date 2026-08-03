@@ -23,6 +23,7 @@ import ProductsUrl from "@/pages/products-url";
 import PriceMonitoring from "@/pages/price-monitoring";
 import PriceComparison from "@/pages/price-comparison";
 import Suppliers from "@/pages/suppliers";
+import MatchReview from "@/pages/match-review";
 import NotFound from "@/pages/not-found";
 
 function Router() {
@@ -57,6 +58,7 @@ function Router() {
           <Route path="/price-monitoring" component={PriceMonitoring} />
           <Route path="/price-comparison" component={PriceComparison} />
           <Route path="/suppliers" component={Suppliers} />
+          <Route path="/match-review" component={MatchReview} />
           <Route path="/clients" component={Clients} />
           <Route path="/competitors" component={Competitors} />
           <Route path="/categories" component={Categories} />

@@ -68,6 +68,8 @@ const precoSellerSchema = z.object({
   estoque: z.number().nullish(),
   // "1" marca oferta indisponível; sem isto entrariam preços 0 como se fossem reais.
   blocked: z.union([z.string(), z.number()]).nullish(),
+  // Nome críptico, mas é o código de barras (conferido no HAR autenticado).
+  CODBRRUNDVNDCSM: z.string().nullish(),
 });
 
 const precoMartinsSchema = z.object({
@@ -78,6 +80,7 @@ const precoMartinsSchema = z.object({
 
 const resultadoSchema = z.object({
   codigoMercadoria: z.string().nullish(),
+  CODBRRUNDVNDCSM: z.string().nullish(),
   precos: z.array(precoMartinsSchema).nullish(),
 });
 
@@ -299,6 +302,8 @@ export class MartinsAdapter implements SupplierAdapter {
         if (p) {
           item.price = p.preco;
           item.isAvailable = p.disponivel;
+          // O EAN vem junto da consulta de preço, não da listagem pública.
+          if (p.ean) item.ean = p.ean;
         }
       }
       if (i + LOTE_PRECO < itens.length) await sleepJitter(800);
@@ -307,8 +312,8 @@ export class MartinsAdapter implements SupplierAdapter {
 
   private async consultarPrecos(
     codigos: string[],
-  ): Promise<Map<string, { preco: number | null; disponivel: boolean }>> {
-    const saida = new Map<string, { preco: number | null; disponivel: boolean }>();
+  ): Promise<Map<string, { preco: number | null; disponivel: boolean; ean?: string }>> {
+    const saida = new Map<string, { preco: number | null; disponivel: boolean; ean?: string }>();
     if (codigos.length === 0) return saida;
 
     // O template não é opcional. Remontar o corpo só com {asm, produtos} é
@@ -372,9 +377,19 @@ export class MartinsAdapter implements SupplierAdapter {
         saida.set(cod, {
           preco: paraNumero(p?.precoNormal),
           disponivel: (p?.estoque ?? 0) > 0,
+          ean: r.CODBRRUNDVNDCSM ?? undefined,
         });
       }
       return saida;
+    }
+
+    // O EAN vem em `resultado[]` mesmo quando o preço escolhido é o do
+    // marketplace, então é colhido dos dois lados.
+    const eansPorCodigo = new Map<string, string>();
+    for (const r of parsed.data.resultado ?? []) {
+      if (r.codigoMercadoria && r.CODBRRUNDVNDCSM) {
+        eansPorCodigo.set(r.codigoMercadoria, r.CODBRRUNDVNDCSM);
+      }
     }
 
     // Marketplace: entre as ofertas do mesmo produto, fica a de menor preço
@@ -391,7 +406,11 @@ export class MartinsAdapter implements SupplierAdapter {
 
       const atual = saida.get(cod);
       if (!atual || atual.preco === null || preco < atual.preco) {
-        saida.set(cod, { preco, disponivel: true });
+        saida.set(cod, {
+          preco,
+          disponivel: true,
+          ean: s.CODBRRUNDVNDCSM ?? eansPorCodigo.get(cod),
+        });
       }
     }
 

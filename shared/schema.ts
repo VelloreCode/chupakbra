@@ -537,6 +537,7 @@ export type InsertOwnBrand = z.infer<typeof insertOwnBrandSchema>;
 export type OwnBrand = typeof ownBrands.$inferSelect;
 export type InsertSupplierSession = z.infer<typeof insertSupplierSessionSchema>;
 export type SupplierSession = typeof supplierSessions.$inferSelect;
+export type ProductMatchCandidate = typeof productMatchCandidates.$inferSelect;
 
 /**
  * Forma canônica de uma marca, usada para decidir se é marca própria.

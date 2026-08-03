@@ -27,6 +27,7 @@ import {
   FileText,
   HelpCircle,
   Truck,
+  Link2,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 
@@ -97,6 +98,12 @@ export default function Sidebar() {
       name: "Fornecedores",
       href: "/suppliers",
       icon: Truck,
+      show: permissions.canAccessProductsUrl,
+    },
+    {
+      name: "Revisão de Match",
+      href: "/match-review",
+      icon: Link2,
       show: permissions.canAccessProductsUrl,
     },
     {

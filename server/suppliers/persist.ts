@@ -109,6 +109,13 @@ export class SupplierWriter {
       await this.applyCategoryIfEmpty(product.id, item.categoryLabel);
     }
 
+    // EAN só é preenchido quando está vazio. Sobrescrever seria arriscado: o
+    // valor existente pode ter vindo de cadastro manual conferido, e o EAN é
+    // o sinal mais forte do motor de match — um errado contamina muito.
+    if (!this.options.dryRun && item.ean && !product.ean) {
+      await storage.setProductEanIfEmpty(product.id, item.ean);
+    }
+
     const newPrice = item.price;
     if (newPrice === null || newPrice === undefined) {
       this.counters.skipped++;
@@ -183,6 +190,7 @@ export class SupplierWriter {
       sku: code,
       name: item.name,
       manufacturer: item.manufacturer,
+      ean: item.ean ?? null,
       clientId: this.options.clientId,
       categoryId,
       basePrice: (item.price ?? 0).toFixed(2),

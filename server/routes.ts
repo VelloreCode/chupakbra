@@ -1367,6 +1367,67 @@ export async function registerRoutes(app: Express): Promise<Server> {
   });
 
   // ===========================================================================
+  // Motor de correspondência de produtos
+  // ===========================================================================
+
+  // Gera candidatos. Fire-and-forget: a varredura leva minutos.
+  app.post("/api/matching/generate", authenticate, async (req, res) => {
+    try {
+      const dryRun = req.body?.dryRun === true;
+      const { gerarCandidatos } = await import("./matching/generate");
+
+      if (dryRun) {
+        return res.json(await gerarCandidatos({ dryRun: true }));
+      }
+
+      void gerarCandidatos().then(
+        (r) => console.log("[MATCHING] geração concluída:", JSON.stringify(r)),
+        (e) => console.error("[MATCHING] geração falhou:", e),
+      );
+      res.status(202).json({ started: true });
+    } catch (error) {
+      console.error("Error generating match candidates:", error);
+      res.status(500).json({ message: "Failed to generate match candidates" });
+    }
+  });
+
+  app.get("/api/matching/candidates", authenticate, async (req, res) => {
+    try {
+      const status = (req.query.status as string) || "pending";
+      const limit = Math.min(parseInt(req.query.limit as string) || 100, 500);
+      res.json(await storage.getMatchCandidates(status, limit));
+    } catch (error) {
+      console.error("Error fetching match candidates:", error);
+      res.status(500).json({ message: "Failed to fetch match candidates" });
+    }
+  });
+
+  // Aprovar liga os produtos; rejeitar apenas tira da fila e impede que o
+  // mesmo par volte numa próxima geração.
+  app.patch("/api/matching/candidates/:id", authenticate, async (req: any, res) => {
+    try {
+      let id: number;
+      try {
+        id = validateId(req.params.id, "ID do candidato");
+      } catch {
+        return res.status(400).json({ message: "ID inválido" });
+      }
+
+      const { status } = z.object({ status: z.enum(["approved", "rejected"]) }).parse(req.body ?? {});
+      const userId = req.session?.user?.id || req.user?.claims?.sub;
+
+      await storage.reviewMatchCandidate(id, status, userId);
+      res.json({ id, status });
+    } catch (error) {
+      if (error instanceof z.ZodError) {
+        return res.status(400).json({ message: 'Esperado { status: "approved" | "rejected" }' });
+      }
+      console.error("Error reviewing match candidate:", error);
+      res.status(500).json({ message: "Failed to review match candidate" });
+    }
+  });
+
+  // ===========================================================================
   // Marcas próprias — definem o que é concorrente
   // ===========================================================================
 

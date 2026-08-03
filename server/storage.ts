@@ -45,7 +45,10 @@ import {
   supplierSessions,
   type SupplierSession,
   type InsertSupplierSession,
+  productMatchCandidates,
+  type ProductMatchCandidate,
 } from "@shared/schema";
+import { alias } from "drizzle-orm/pg-core";
 import { formatarMarca, formatarTextoLegivel } from "@shared/text-format";
 import { db } from "./db";
 import { eq, sql, desc, asc, and, or, ilike, count, isNull, like, isNotNull, ne, gte, lte, inArray } from "drizzle-orm";
@@ -66,6 +69,20 @@ export interface IStorage {
   getDistinctManufacturers(): Promise<string[]>;
   getOrCreateCategoryByName(name: string): Promise<Category>;
   setProductCategoryIfEmpty(productId: number, categoryId: number): Promise<boolean>;
+
+  // Motor de correspondência
+  setProductEanIfEmpty(productId: number, ean: string): Promise<boolean>;
+  upsertMatchCandidate(c: {
+    masterProductId: number;
+    candidateProductId: number;
+    score: number;
+    evidence: unknown;
+  }): Promise<void>;
+  getMatchCandidates(status?: string, limit?: number): Promise<Array<ProductMatchCandidate & {
+    master: Product;
+    candidate: Product;
+  }>>;
+  reviewMatchCandidate(id: number, status: "approved" | "rejected", userId?: string): Promise<void>;
 
   // Sessões manuais de fornecedor (Martins: login com 2FA)
   getSupplierSession(supplier: string): Promise<SupplierSession | undefined>;
@@ -462,6 +479,111 @@ export class DatabaseStorage implements IStorage {
   // Category operations
   async getCategories(): Promise<Category[]> {
     return await db.select().from(categories).orderBy(categories.name);
+  }
+
+  // ---------------------------------------------------------------------------
+  // Motor de correspondência
+  // ---------------------------------------------------------------------------
+
+  async setProductEanIfEmpty(productId: number, ean: string): Promise<boolean> {
+    const limpo = String(ean).replace(/\D/g, "");
+    if (![8, 12, 13, 14].includes(limpo.length)) return false;
+
+    const r = await db
+      .update(products)
+      .set({ ean: limpo, updatedAt: new Date() })
+      .where(and(eq(products.id, productId), or(isNull(products.ean), eq(products.ean, ""))))
+      .returning({ id: products.id });
+    return r.length > 0;
+  }
+
+  async upsertMatchCandidate(c: {
+    masterProductId: number;
+    candidateProductId: number;
+    score: number;
+    evidence: unknown;
+  }): Promise<void> {
+    await db
+      .insert(productMatchCandidates)
+      .values({
+        masterProductId: c.masterProductId,
+        candidateProductId: c.candidateProductId,
+        score: c.score,
+        evidence: c.evidence as any,
+      })
+      .onConflictDoUpdate({
+        target: [productMatchCandidates.masterProductId, productMatchCandidates.candidateProductId],
+        set: {
+          score: c.score,
+          evidence: c.evidence as any,
+          updatedAt: new Date(),
+          // Reprocessar NÃO reabre o que já foi decidido: uma pessoa que
+          // rejeitou não deve ver o mesmo par voltar para a fila.
+        },
+        setWhere: eq(productMatchCandidates.status, "pending"),
+      });
+  }
+
+  async getMatchCandidates(status = "pending", limit = 100) {
+    const master = alias(products, "master");
+    const candidate = alias(products, "candidate");
+
+    const rows = await db
+      .select({
+        c: productMatchCandidates,
+        master,
+        candidate,
+      })
+      .from(productMatchCandidates)
+      .innerJoin(master, eq(productMatchCandidates.masterProductId, master.id))
+      .innerJoin(candidate, eq(productMatchCandidates.candidateProductId, candidate.id))
+      .where(eq(productMatchCandidates.status, status))
+      .orderBy(desc(productMatchCandidates.score))
+      .limit(limit);
+
+    return rows.map((r) => ({ ...r.c, master: r.master, candidate: r.candidate })) as any;
+  }
+
+  /**
+   * Aprovar liga os produtos de fato: o candidato herda o match_group do
+   * master e aponta para ele. É o momento em que a sugestão vira dado.
+   */
+  async reviewMatchCandidate(
+    id: number,
+    status: "approved" | "rejected",
+    userId?: string,
+  ): Promise<void> {
+    const [cand] = await db
+      .select()
+      .from(productMatchCandidates)
+      .where(eq(productMatchCandidates.id, id))
+      .limit(1);
+    if (!cand) throw new Error(`Candidato ${id} não encontrado`);
+
+    if (status === "approved") {
+      const [master] = await db
+        .select()
+        .from(products)
+        .where(eq(products.id, cand.masterProductId))
+        .limit(1);
+
+      if (master) {
+        await db
+          .update(products)
+          .set({
+            masterProductId: master.id,
+            // Só herda o grupo se o master tiver um; senão o vínculo direto basta.
+            ...(master.matchGroup ? { matchGroup: master.matchGroup } : {}),
+            updatedAt: new Date(),
+          })
+          .where(eq(products.id, cand.candidateProductId));
+      }
+    }
+
+    await db
+      .update(productMatchCandidates)
+      .set({ status, reviewedBy: userId ?? null, reviewedAt: new Date(), updatedAt: new Date() })
+      .where(eq(productMatchCandidates.id, id));
   }
 
   // ---------------------------------------------------------------------------
