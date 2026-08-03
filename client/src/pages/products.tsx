@@ -22,6 +22,8 @@ export default function Products() {
     search: "",
     categoryId: "",
     clientId: "",
+    manufacturer: "",
+    sourceType: "",
     status: "",
     limit: 50,
     offset: 0,
@@ -29,6 +31,10 @@ export default function Products() {
 
   const { data: categories = [] } = useQuery({
     queryKey: ["/api/categories"],
+  });
+
+  const { data: manufacturers = [] } = useQuery<string[]>({
+    queryKey: ["/api/products/manufacturers"],
   });
 
   const { data: clients = [] } = useQuery({
@@ -66,6 +72,8 @@ export default function Products() {
       if (filters.search) queryParams.append('search', filters.search);
       if (filters.categoryId) queryParams.append('categoryId', filters.categoryId);
       if (filters.clientId) queryParams.append('clientId', filters.clientId);
+      if (filters.manufacturer) queryParams.append('manufacturer', filters.manufacturer);
+      if (filters.sourceType) queryParams.append('sourceType', filters.sourceType);
       if (filters.status) queryParams.append('status', filters.status);
       queryParams.append('limit', '10000'); // Export all filtered results
       
@@ -130,7 +138,7 @@ export default function Products() {
               </CardTitle>
             </CardHeader>
             <CardContent>
-              <div className="grid grid-cols-1 md:grid-cols-5 gap-4">
+              <div className="grid grid-cols-1 md:grid-cols-3 lg:grid-cols-7 gap-4">
                 <Input
                   placeholder="Buscar produtos..."
                   value={filters.search}
@@ -169,8 +177,38 @@ export default function Products() {
                     ))}
                   </SelectContent>
                 </Select>
-                <Select 
-                  value={filters.status || "all"} 
+                <Select
+                  value={filters.manufacturer || "all"}
+                  onValueChange={(value) => setFilters({ ...filters, manufacturer: value === "all" ? "" : value, offset: 0 })}
+                >
+                  <SelectTrigger>
+                    <SelectValue placeholder="Todas as marcas" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="all">Todas as marcas</SelectItem>
+                    {manufacturers.map((marca) => (
+                      <SelectItem key={marca} value={marca}>
+                        {marca}
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+                <Select
+                  value={filters.sourceType || "all"}
+                  onValueChange={(value) => setFilters({ ...filters, sourceType: value === "all" ? "" : value, offset: 0 })}
+                >
+                  <SelectTrigger>
+                    <SelectValue placeholder="Todos os tipos" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="all">Todos os tipos</SelectItem>
+                    {/* Valores casam com o filtro do backend em storage.getProducts */}
+                    <SelectItem value="url">URL</SelectItem>
+                    <SelectItem value="database">Base de dados</SelectItem>
+                  </SelectContent>
+                </Select>
+                <Select
+                  value={filters.status || "all"}
                   onValueChange={(value) => setFilters({ ...filters, status: value === "all" ? "" : value, offset: 0 })}
                 >
                   <SelectTrigger>

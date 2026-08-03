@@ -1270,6 +1270,17 @@ export async function registerRoutes(app: Express): Promise<Server> {
     }
   });
 
+  // Marcas distintas cadastradas, para popular o filtro "Marca" da tela de produtos.
+  app.get("/api/products/manufacturers", authenticate, async (_req, res) => {
+    try {
+      const manufacturers = await storage.getDistinctManufacturers();
+      res.json(manufacturers);
+    } catch (error) {
+      console.error("Error fetching manufacturers:", error);
+      res.status(500).json({ message: "Failed to fetch manufacturers" });
+    }
+  });
+
   // Bulk operations for products
   app.post("/api/products/bulk", isAuthenticated, async (req, res) => {
     try {

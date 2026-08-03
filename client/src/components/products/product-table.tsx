@@ -19,6 +19,8 @@ interface ProductTableProps {
     search: string;
     categoryId: string;
     clientId: string;
+    manufacturer: string;
+    sourceType: string;
     status: string;
     limit: number;
     offset: number;
@@ -43,6 +45,8 @@ export default function ProductTable({ filters, onEditProduct, onFiltersChange }
       if (filters?.search) searchParams.append("search", filters.search);
       if (filters?.categoryId) searchParams.append("categoryId", filters.categoryId);
       if (filters?.clientId) searchParams.append("clientId", filters.clientId);
+      if (filters?.manufacturer) searchParams.append("manufacturer", filters.manufacturer);
+      if (filters?.sourceType) searchParams.append("sourceType", filters.sourceType);
       if (filters?.status) searchParams.append("status", filters.status);
       searchParams.append("limit", (filters?.limit || 50).toString());
       searchParams.append("offset", (filters?.offset || 0).toString());

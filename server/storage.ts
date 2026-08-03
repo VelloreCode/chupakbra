@@ -55,6 +55,7 @@ export interface IStorage {
 
   // Category operations
   getCategories(): Promise<Category[]>;
+  getDistinctManufacturers(): Promise<string[]>;
   getCategory(id: number): Promise<Category | undefined>;
   createCategory(category: InsertCategory): Promise<Category>;
   updateCategory(id: number, category: Partial<InsertCategory>): Promise<Category>;
@@ -436,6 +437,19 @@ export class DatabaseStorage implements IStorage {
   // Category operations
   async getCategories(): Promise<Category[]> {
     return await db.select().from(categories).orderBy(categories.name);
+  }
+
+  /**
+   * Valores distintos de manufacturer para popular o filtro "Marca".
+   * Não há tabela própria de marcas — o campo é texto livre em `products`.
+   */
+  async getDistinctManufacturers(): Promise<string[]> {
+    const rows = await db
+      .selectDistinct({ manufacturer: products.manufacturer })
+      .from(products)
+      .where(and(isNotNull(products.manufacturer), ne(products.manufacturer, '')))
+      .orderBy(asc(products.manufacturer));
+    return rows.map((r) => r.manufacturer as string);
   }
 
   async getCategory(id: number): Promise<Category | undefined> {
@@ -1186,10 +1200,15 @@ export class DatabaseStorage implements IStorage {
       conditions.push(ilike(products.sku, `%${filters.sku}%`));
     }
     if (filters?.sourceType) {
+      // A coluna "Tipo" na UI decide URL vs "Base de dados" com truthy check
+      // (products.sourceUrl vazia = falsy = "Base de dados"). O filtro precisa
+      // seguir o mesmo critério — se olhasse só isNull, os 475 master com
+      // source_url = '' passariam como URL, e a filtragem por database daria
+      // zero, divergindo do que a tela mostra.
       if (filters.sourceType === 'url') {
-        conditions.push(isNotNull(products.sourceUrl));
+        conditions.push(and(isNotNull(products.sourceUrl), ne(products.sourceUrl, '')));
       } else if (filters.sourceType === 'database') {
-        conditions.push(isNull(products.sourceUrl));
+        conditions.push(or(isNull(products.sourceUrl), eq(products.sourceUrl, '')));
       }
     }
     if (filters?.hasSourceUrl !== undefined) {
