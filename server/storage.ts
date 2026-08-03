@@ -46,6 +46,7 @@ import {
   type SupplierSession,
   type InsertSupplierSession,
 } from "@shared/schema";
+import { formatarMarca, formatarTextoLegivel } from "@shared/text-format";
 import { db } from "./db";
 import { eq, sql, desc, asc, and, or, ilike, count, isNull, like, isNotNull, ne, gte, lte, inArray } from "drizzle-orm";
 import crypto from "crypto";
@@ -1570,13 +1571,22 @@ export class DatabaseStorage implements IStorage {
   }
 
   async createProduct(product: InsertProduct): Promise<Product> {
+    // Padroniza na entrada: marca sem prefixo "Marca:" nem caixa alta, nome
+    // legível. Fazer só na exibição deixaria o dado sujo no banco e a
+    // comparação de texto do match teria de lidar com as duas formas.
+    const normalizado = {
+      ...product,
+      manufacturer: product.manufacturer ? formatarMarca(product.manufacturer) : product.manufacturer,
+      name: formatarTextoLegivel(product.name),
+    };
+
     // is_competitor é derivado da marca, não informado por quem chama: se o
     // caller pudesse decidir, cada caminho de escrita (upload, sync, tela)
     // teria a própria versão da regra e elas divergiriam.
-    const isCompetitor = await this.deriveIsCompetitor(product.manufacturer);
+    const isCompetitor = await this.deriveIsCompetitor(normalizado.manufacturer);
     const [newProduct] = await db
       .insert(products)
-      .values({ ...product, isCompetitor })
+      .values({ ...normalizado, isCompetitor })
       .returning();
     return newProduct;
   }
@@ -1600,6 +1610,14 @@ export class DatabaseStorage implements IStorage {
         delete updateData[key];
       }
     });
+
+    // Mesma padronização da criação, para o dado não sujar por atualização.
+    if (updateData.manufacturer !== undefined) {
+      updateData.manufacturer = formatarMarca(updateData.manufacturer);
+    }
+    if (updateData.name !== undefined) {
+      updateData.name = formatarTextoLegivel(updateData.name);
+    }
 
     // Marca mudou => a classificação de concorrente muda junto. Recalcular aqui
     // evita que a flag fique presa no valor antigo até o próximo recomputo geral.
