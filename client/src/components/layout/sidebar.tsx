@@ -58,14 +58,14 @@ export default function Sidebar() {
       isLive: true,
     },
     {
-      name: "Comparação de Preços",
+      name: "Monitoramento URL",
       href: "/comparison",
       icon: Zap,
       show: permissions.canAccessComparison,
       isLive: true,
     },
     {
-      name: "Monitoramento URL",
+      name: "Comparação de Preços",
       href: "/price-monitoring",
       icon: Target,
       show: permissions.canAccessMonitoring,
