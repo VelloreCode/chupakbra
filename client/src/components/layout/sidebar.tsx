@@ -59,16 +59,16 @@ export default function Sidebar() {
     },
     {
       name: "Monitoramento URL",
+      href: "/price-monitoring",
+      icon: Target,
+      show: permissions.canAccessMonitoring,
+    },
+    {
+      name: "Comparação de Preços",
       href: "/comparison",
       icon: Zap,
       show: permissions.canAccessComparison,
       isLive: true,
-    },
-    {
-      name: "Comparação de Preços",
-      href: "/price-monitoring",
-      icon: Target,
-      show: permissions.canAccessMonitoring,
     },
     {
       name: "Clientes",
