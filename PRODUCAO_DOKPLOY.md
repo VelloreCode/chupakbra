@@ -175,6 +175,10 @@ openssl rand -base64 32
 **Não defina** `REPLIT_DOMAINS`, `REPL_ID` nem `AUTH_HUB_*`. O app sobe
 normalmente sem elas.
 
+Em particular, deixe `AUTH_HUB_ENABLED` de fora (ou `false`): sem ela o
+servidor nem registra as rotas `/api/auth/sso/*` e a tela de login não desenha
+o botão do Microsoft 365. É o comportamento que você quer agora.
+
 ---
 
 ## Parte 6 — Deploy e verificação
@@ -211,15 +215,23 @@ SUPPLIER_SYNC_ENABLED=false
 O mesmo vale para o cron diário de preços, que sobe junto com o servidor nos
 dois ambientes.
 
-### 2. O botão "Entrar com Microsoft 365" vai aparecer em produção
+### 2. O botão "Entrar com Microsoft 365" — resolvido
 
-Você optou por não usar SSO agora, mas o botão está na tela de login e o
-código do hub foi para `main`. Clicando nele, o usuário é redirecionado ao
-hub — que pode aceitar ou recusar, dependendo de o `redirect_uri` de produção
-estar liberado lá. **Decida antes de divulgar o endereço:** ou libera o
-domínio de produção no Auth Hub, ou esconde o botão atrás de uma variável de
-ambiente. Deixar como está significa um botão de resultado incerto na tela de
-entrada.
+O SSO agora é **opt-in por ambiente**, via `AUTH_HUB_ENABLED`. Com a variável
+ausente ou `false`:
+
+- o servidor não registra `/api/auth/sso/login` nem `/callback`, então quem
+  digitar a URL cai no catch-all do SPA e recebe a própria página — nenhum
+  redirect para o hub acontece;
+- a tela de login não desenha o botão nem o separador "ou entre com e-mail".
+
+O padrão é desligado de propósito: esquecer a variável falha para o lado
+seguro. Quando quiser ligar o SSO em produção, o caminho é liberar o
+`redirect_uri` do domínio de produção no Auth Hub **e só então** definir
+`AUTH_HUB_ENABLED=true`.
+
+O ambiente de teste precisa da variável definida como `true` no painel do
+Dokploy para manter o botão.
 
 ### 3. A senha local usa SHA-256 sem salt
 

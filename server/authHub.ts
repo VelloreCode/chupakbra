@@ -17,6 +17,12 @@ const AUTH_HUB_URL = (
 
 const AUTH_HUB_SYSTEM_SLUG = process.env.AUTH_HUB_SYSTEM_SLUG ?? "chupakbra";
 
+// Opt-in explícito: o SSO só existe onde AUTH_HUB_ENABLED=true. O padrão é
+// desligado de propósito — um ambiente novo (produção, por exemplo) não deve
+// mostrar um botão de login cujo redirect_uri talvez nem esteja liberado no
+// hub. Esquecer de definir a variável falha para o lado seguro.
+const AUTH_HUB_ENABLED = process.env.AUTH_HUB_ENABLED === "true";
+
 const EXPECTED_ISSUER = "auth-hub-grupovellore";
 
 const INTROSPECT_TIMEOUT_MS = 10_000;
@@ -72,6 +78,18 @@ async function introspect(token: string): Promise<IntrospectResponse> {
 }
 
 export function setupAuthHub(app: Express) {
+  // A tela de login pergunta por aqui se deve desenhar o botão do Microsoft
+  // 365. Fica fora do `if` abaixo porque precisa responder nos dois casos.
+  app.get("/api/auth/sso/status", (_req, res) => {
+    res.json({ enabled: AUTH_HUB_ENABLED });
+  });
+
+  // Desligado: nem registra as rotas. Esconder só o botão deixaria o fluxo
+  // acessível para quem digitasse a URL. Sem as rotas, a requisição cai no
+  // catch-all do SPA (serveStatic) e devolve a própria página — o que importa
+  // é que nenhum redirect para o hub acontece.
+  if (!AUTH_HUB_ENABLED) return;
+
   // Início do fluxo: o botão "Entrar com Microsoft 365" aponta para cá.
   app.get("/api/auth/sso/login", (req, res) => {
     const url = new URL(`${AUTH_HUB_URL}/auth/login`);

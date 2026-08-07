@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { useQueryClient } from "@tanstack/react-query";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { useLocation } from "wouter";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
@@ -32,6 +32,15 @@ export default function Login() {
     email: "",
     password: ""
   });
+
+  // O SSO é opt-in por ambiente (AUTH_HUB_ENABLED no servidor). Enquanto a
+  // resposta não chega, `enabled` é undefined e o botão fica fora — melhor do
+  // que desenhá-lo e removê-lo em seguida na tela de entrada.
+  const { data: ssoStatus } = useQuery<{ enabled: boolean }>({
+    queryKey: ["/api/auth/sso/status"],
+    staleTime: Infinity,
+  });
+  const ssoEnabled = ssoStatus?.enabled === true;
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -99,26 +108,31 @@ export default function Login() {
             )}
 
             {/* Acesso corporativo: passa pelo hub de autenticação, que sincroniza
-                os usuários do Microsoft Entra ID. */}
-            <Button
-              type="button"
-              onClick={() => (window.location.href = "/api/auth/sso/login")}
-              className="w-full bg-[#2F2F2F] hover:bg-black text-white shadow-lg transition-all duration-200"
-            >
-              <MicrosoftLogo />
-              Entrar com Microsoft 365
-            </Button>
+                os usuários do Microsoft Entra ID. Só aparece onde o ambiente
+                habilitou o SSO — sem ele, o separador também não faz sentido. */}
+            {ssoEnabled && (
+              <>
+                <Button
+                  type="button"
+                  onClick={() => (window.location.href = "/api/auth/sso/login")}
+                  className="w-full bg-[#2F2F2F] hover:bg-black text-white shadow-lg transition-all duration-200"
+                >
+                  <MicrosoftLogo />
+                  Entrar com Microsoft 365
+                </Button>
 
-            <div className="relative">
-              <div className="absolute inset-0 flex items-center">
-                <span className="w-full border-t border-gray-300 dark:border-gray-600" />
-              </div>
-              <div className="relative flex justify-center text-xs uppercase">
-                <span className="bg-white dark:bg-gray-800 px-2 text-gray-500 dark:text-gray-400">
-                  ou entre com e-mail
-                </span>
-              </div>
-            </div>
+                <div className="relative">
+                  <div className="absolute inset-0 flex items-center">
+                    <span className="w-full border-t border-gray-300 dark:border-gray-600" />
+                  </div>
+                  <div className="relative flex justify-center text-xs uppercase">
+                    <span className="bg-white dark:bg-gray-800 px-2 text-gray-500 dark:text-gray-400">
+                      ou entre com e-mail
+                    </span>
+                  </div>
+                </div>
+              </>
+            )}
 
             <form onSubmit={handleSubmit} className="space-y-4">
               <div className="space-y-2">
