@@ -63,6 +63,12 @@ export interface IStorage {
   createUser(user: Omit<UpsertUser, 'id'> & { password?: string }): Promise<User>;
   updateUser(id: string, user: Partial<UpsertUser> & { password?: string }): Promise<User>;
   deleteUser(id: string): Promise<void>;
+  upsertAuthHubUser(profile: {
+    authHubId: string;
+    email: string;
+    firstName: string;
+    lastName: string;
+  }): Promise<User>;
 
   // Category operations
   getCategories(): Promise<Category[]>;
@@ -443,7 +449,7 @@ export class DatabaseStorage implements IStorage {
         firstName: userData.firstName,
         lastName: userData.lastName,
         profileImageUrl: userData.profileImageUrl,
-        role: userData.role || 'visitante',
+        role: userData.role || 'visualizador',
         passwordHash,
       })
       .returning();
@@ -474,6 +480,69 @@ export class DatabaseStorage implements IStorage {
 
   async deleteUser(id: string): Promise<void> {
     await db.delete(users).where(eq(users.id, id));
+  }
+
+  // Primeiro login (e os seguintes) pelo Auth Hub.
+  //
+  // A busca é por auth_hub_id e, na falta dele, por e-mail — é o e-mail que
+  // religa quem já tinha cadastro local ao usuário do AD. Em nenhum caso
+  // mexemos em role ou password_hash: a permissão é editada dentro da
+  // plataforma e não pode ser rebaixada a cada login.
+  async upsertAuthHubUser(profile: {
+    authHubId: string;
+    email: string;
+    firstName: string;
+    lastName: string;
+  }): Promise<User> {
+    const email = profile.email.trim().toLowerCase();
+
+    const [byHubId] = await db
+      .select()
+      .from(users)
+      .where(eq(users.authHubId, profile.authHubId))
+      .limit(1);
+
+    // lower() em vez de ilike: o `_` de um e-mail como nome_sobrenome@… seria
+    // curinga num LIKE e casaria com o cadastro de outra pessoa.
+    const existing =
+      byHubId ??
+      (
+        await db
+          .select()
+          .from(users)
+          .where(sql`lower(${users.email}) = ${email}`)
+          .limit(1)
+      )[0];
+
+    if (existing) {
+      const [updated] = await db
+        .update(users)
+        .set({
+          authHubId: profile.authHubId,
+          email,
+          firstName: profile.firstName,
+          lastName: profile.lastName,
+          lastLogin: new Date(),
+          updatedAt: new Date(),
+        })
+        .where(eq(users.id, existing.id))
+        .returning();
+      return updated;
+    }
+
+    const [created] = await db
+      .insert(users)
+      .values({
+        id: crypto.randomUUID(),
+        authHubId: profile.authHubId,
+        email,
+        firstName: profile.firstName,
+        lastName: profile.lastName,
+        role: "visualizador",
+        lastLogin: new Date(),
+      })
+      .returning();
+    return created;
   }
 
   // Category operations

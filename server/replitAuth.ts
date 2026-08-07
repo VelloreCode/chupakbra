@@ -47,6 +47,19 @@ export function getSession() {
   });
 }
 
+// req.logout() só limpa o usuário do passport — não toca em req.session.user,
+// que é onde ficam os logins local e do Auth Hub. Sem destruir a sessão, quem
+// entrou por esses caminhos continuava logado depois de clicar em "Sair".
+function destroySession(req: any, res: any, done: () => void) {
+  req.logout(() => {
+    req.session?.destroy(() => {
+      // connect.sid é o nome padrão do cookie do express-session.
+      res.clearCookie("connect.sid", { path: "/" });
+      done();
+    });
+  });
+}
+
 function updateUserSession(
   user: any,
   tokens: client.TokenEndpointResponse & client.TokenEndpointResponseHelpers
@@ -88,7 +101,7 @@ export async function setupAuth(app: Express) {
       res.status(404).json({ message: "Replit login is not available on this deployment" });
     });
     app.get("/api/logout", (req, res) => {
-      req.logout(() => res.redirect("/"));
+      destroySession(req, res, () => res.redirect("/"));
     });
     return;
   }
@@ -134,7 +147,7 @@ export async function setupAuth(app: Express) {
   });
 
   app.get("/api/logout", (req, res) => {
-    req.logout(() => {
+    destroySession(req, res, () => {
       res.redirect(
         client.buildEndSessionUrl(config, {
           client_id: process.env.REPL_ID!,

@@ -33,8 +33,11 @@ export const users = pgTable("users", {
   firstName: varchar("first_name"),
   lastName: varchar("last_name"),
   profileImageUrl: varchar("profile_image_url"),
-  role: varchar("role").notNull().default("visitante"), // "administrador", "editor", "visitante"
+  role: varchar("role").notNull().default("visualizador"), // "administrador", "editor", "visualizador"
   passwordHash: varchar("password_hash"), // Para usuários criados manualmente
+  // "sub" do usuário no Auth Hub (Microsoft Entra ID). Guardado para reencontrar
+  // a pessoa mesmo que o e-mail dela mude no AD.
+  authHubId: varchar("auth_hub_id").unique(),
   lastLogin: timestamp("last_login"),
   createdAt: timestamp("created_at").defaultNow(),
   updatedAt: timestamp("updated_at").defaultNow(),

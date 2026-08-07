@@ -2,6 +2,7 @@ import type { Express } from "express";
 import { createServer, type Server } from "http";
 import { storage } from "./storage";
 import { setupAuth, isAuthenticated } from "./replitAuth";
+import { setupAuthHub } from "./authHub";
 import { generatePricingStrategy, generateBenchmarkAnalysis } from "./ai-pricing";
 import { getScrapingQueue } from "./scraping-queue";
 import {
@@ -91,26 +92,41 @@ export async function registerRoutes(app: Express): Promise<Server> {
   // Auth middleware
   await setupAuth(app);
 
+  // Login pelo Auth Hub (Microsoft 365 / AD) — /api/auth/sso/login e /callback
+  setupAuthHub(app);
+
   // Local authentication route
   app.post("/api/auth/login", async (req, res) => {
     try {
       const { email, password } = req.body;
-      
+
       if (!email || !password) {
         return res.status(400).json({ message: "Email e senha são obrigatórios" });
       }
 
-      // Find user by email
+      // Find user by email. Sem distinguir maiúsculas: o Auth Hub grava o
+      // e-mail em minúsculas e ninguém digita o login sempre igual.
       const users = await storage.getAllUsers();
-      const user = users.find(u => u.email === email);
-      
+      const alvo = String(email).trim().toLowerCase();
+      const user = users.find(u => u.email?.toLowerCase() === alvo);
+
       if (!user) {
         return res.status(401).json({ message: "Credenciais inválidas" });
       }
 
-      // For demo purposes, accept any password for existing users
-      // In production, you would verify password hash here
-      
+      // Cadastro sem senha própria (veio do Auth Hub ou do SSO do Replit):
+      // o caminho de acesso dessa pessoa é o botão do Microsoft 365.
+      if (!user.passwordHash) {
+        return res.status(401).json({
+          message: "Este usuário acessa pelo login Microsoft 365.",
+        });
+      }
+
+      const passwordHash = crypto.createHash('sha256').update(password).digest('hex');
+      if (passwordHash !== user.passwordHash) {
+        return res.status(401).json({ message: "Credenciais inválidas" });
+      }
+
       // Set session
       (req.session as any).user = {
         id: user.id,
@@ -160,9 +176,27 @@ export async function registerRoutes(app: Express): Promise<Server> {
     try {
       // Check for local session user first
       if (req.session?.user) {
-        return res.json((req.session as any).user);
+        const sessionUser = (req.session as any).user;
+        // Relê do banco: o papel é editado na tela de Usuários e precisa valer
+        // na hora, sem esperar o próximo login. Se o cadastro sumiu, devolve o
+        // que está na sessão para não derrubar quem já estava dentro.
+        const current = await storage.getUser(sessionUser.id);
+        if (!current) {
+          return res.json(sessionUser);
+        }
+
+        const fresh = {
+          id: current.id,
+          email: current.email,
+          firstName: current.firstName,
+          lastName: current.lastName,
+          profileImageUrl: current.profileImageUrl,
+          role: current.role,
+        };
+        (req.session as any).user = fresh;
+        return res.json(fresh);
       }
-      
+
       // Fall back to Replit OIDC user
       const userId = req.user?.claims?.sub;
       if (userId) {

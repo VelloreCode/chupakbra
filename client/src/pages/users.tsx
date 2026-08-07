@@ -23,23 +23,23 @@ const userFormSchema = z.object({
   email: z.string().email("Email inválido"),
   firstName: z.string().min(1, "Nome é obrigatório"),
   lastName: z.string().optional(),
-  role: z.enum(["administrador", "editor", "visitante"]),
+  role: z.enum(["administrador", "editor", "visualizador"]),
   password: z.string().min(6, "Senha deve ter pelo menos 6 caracteres").optional(),
   generatePassword: z.boolean().default(false),
 });
 
 type UserFormData = z.infer<typeof userFormSchema>;
 
-const roleLabels = {
+const roleLabels: Record<string, string> = {
   administrador: "Administrador",
   editor: "Editor",
-  visitante: "Visitante"
+  visualizador: "Visualizador"
 };
 
-const roleBadgeColors = {
+const roleBadgeColors: Record<string, string> = {
   administrador: "bg-red-100 text-red-800",
   editor: "bg-blue-100 text-blue-800",
-  visitante: "bg-gray-100 text-gray-800"
+  visualizador: "bg-gray-100 text-gray-800"
 };
 
 export default function Users() {
@@ -142,7 +142,7 @@ export default function Users() {
       email: user.email,
       firstName: user.firstName || "",
       lastName: user.lastName || "",
-      role: user.role as "administrador" | "editor" | "visitante",
+      role: user.role as "administrador" | "editor" | "visualizador",
       password: "",
       generatePassword: false,
     });

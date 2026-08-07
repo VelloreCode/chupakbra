@@ -8,12 +8,26 @@ import { Label } from "@/components/ui/label";
 import { Alert, AlertDescription } from "@/components/ui/alert";
 import { TrendingUp, Lock, User, Eye, EyeOff } from "lucide-react";
 
+function MicrosoftLogo() {
+  return (
+    <svg className="h-4 w-4 mr-2" viewBox="0 0 23 23" aria-hidden="true">
+      <path fill="#f25022" d="M1 1h10v10H1z" />
+      <path fill="#7fba00" d="M12 1h10v10H12z" />
+      <path fill="#00a4ef" d="M1 12h10v10H1z" />
+      <path fill="#ffb900" d="M12 12h10v10H12z" />
+    </svg>
+  );
+}
+
 export default function Login() {
   const queryClient = useQueryClient();
   const [, setLocation] = useLocation();
   const [showPassword, setShowPassword] = useState(false);
   const [isLoading, setIsLoading] = useState(false);
-  const [error, setError] = useState("");
+  // O callback do SSO devolve o motivo da falha em ?sso_error=
+  const [error, setError] = useState(
+    () => new URLSearchParams(window.location.search).get("sso_error") ?? ""
+  );
   const [formData, setFormData] = useState({
     email: "",
     password: ""
@@ -83,6 +97,28 @@ export default function Login() {
                 </AlertDescription>
               </Alert>
             )}
+
+            {/* Acesso corporativo: passa pelo hub de autenticação, que sincroniza
+                os usuários do Microsoft Entra ID. */}
+            <Button
+              type="button"
+              onClick={() => (window.location.href = "/api/auth/sso/login")}
+              className="w-full bg-[#2F2F2F] hover:bg-black text-white shadow-lg transition-all duration-200"
+            >
+              <MicrosoftLogo />
+              Entrar com Microsoft 365
+            </Button>
+
+            <div className="relative">
+              <div className="absolute inset-0 flex items-center">
+                <span className="w-full border-t border-gray-300 dark:border-gray-600" />
+              </div>
+              <div className="relative flex justify-center text-xs uppercase">
+                <span className="bg-white dark:bg-gray-800 px-2 text-gray-500 dark:text-gray-400">
+                  ou entre com e-mail
+                </span>
+              </div>
+            </div>
 
             <form onSubmit={handleSubmit} className="space-y-4">
               <div className="space-y-2">
