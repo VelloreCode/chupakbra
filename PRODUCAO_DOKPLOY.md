@@ -52,16 +52,49 @@ git push origin Teste
 
 ---
 
-## Parte 2 — Criar o Postgres de produção no Dokploy
+## Parte 2 — Criar o banco de produção
 
-1. No projeto do Dokploy: **Database → PostgreSQL**.
-2. Use **PostgreSQL 17** — a mesma versão do banco de teste. Versão diferente
-   complica o restore sem necessidade.
-3. Nome do serviço, banco, usuário e senha: use nomes distintos do teste
-   (ex.: `chupakbra-prod`) para não confundir os dois no painel.
-4. Anote a connection string interna. Ela será a `DATABASE_URL` da Parte 5.
+**Não crie um serviço Postgres novo.** A convenção desta infra é uma instância
+Postgres por ambiente, com um banco e uma role por aplicação dentro dela. No
+ambiente de teste:
 
-Não é preciso expor porta externa: a cópia da Parte 3 roda dentro do servidor.
+| Banco | Dono |
+|---|---|
+| `chupakbra` | `chupakbra` |
+| `hubrcateste` | `hubrcateste` |
+| `iallore` | `iallore` |
+| `vellore_teste` | `vellore_teste` (superusuário da instância) |
+
+Produção já tem a instância equivalente, no projeto **Apps Vellore - Produção**:
+
+| | |
+|---|---|
+| Serviço | `PostgreSQL Apps Prod` |
+| Internal Host | `apps-vellore-postgresqlapps-prod-o9mfxa` |
+| Imagem | `pgvector/pgvector:pg17` — **PostgreSQL 17**, mesma major do teste |
+| Superusuário | `vellore` |
+
+O ChupaKbra usa apenas a extensão `plpgsql`; pgvector não é necessário, só vem
+junto na imagem.
+
+**Passos** — em `PostgreSQL Apps Prod → Open Terminal`:
+
+```bash
+psql -U vellore -d vellore
+```
+
+```sql
+CREATE ROLE chupakbra LOGIN PASSWORD 'SENHA_FORTE';
+CREATE DATABASE chupakbra OWNER chupakbra;
+```
+
+Confira com `\l` e saia com `\q`. A `DATABASE_URL` da Parte 5 fica:
+
+```
+postgres://chupakbra:SENHA_FORTE@apps-vellore-postgresqlapps-prod-o9mfxa:5432/chupakbra
+```
+
+Use o **Internal Host**, não o IP externo: o tráfego fica na rede do Docker.
 
 ---
 
@@ -128,8 +161,22 @@ Compare com os números da tabela lá em cima.
 3. **Repositório**: `VelloreCode/chupakbra`, branch **`main`**.
 4. **Build type**: Dockerfile (já está na raiz, build em duas etapas).
 5. **Porta interna**: `5003`.
-6. **Domínio**: cadastre o domínio de produção em Domains e ative HTTPS
-   (Let's Encrypt automático).
+6. **Domínio**: `cpk.grupovellore.com.br`, com HTTPS (Let's Encrypt).
+
+### Antes: liberar o domínio, que hoje é do teste
+
+`cpk.grupovellore.com.br` aponta para o **Chupa Kbra - Teste**. Um hostname só
+pode pertencer a um serviço por vez — é o Traefik que roteia por ele. A ordem
+abaixo evita deixar o teste fora do ar antes de produção existir:
+
+1. Crie o DNS de `cpk-teste.grupovellore.com.br` apontando para
+   `216.128.168.129`. **Antes de mexer no Dokploy** — o Let's Encrypt só emite
+   certificado para domínio que já resolve.
+2. Confirme que o novo nome resolve.
+3. No Dokploy, troque o domínio do **Chupa Kbra - Teste** para `cpk-teste...`
+   e deixe emitir o certificado.
+4. Confirme que o teste abre no endereço novo.
+5. Só então cadastre `cpk.grupovellore.com.br` na aplicação de produção.
 
 ---
 
