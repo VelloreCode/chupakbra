@@ -6,7 +6,7 @@
 // página de cada produto.
 
 import * as cheerio from "cheerio";
-import type { AxiosInstance } from "axios";
+import type { AxiosInstance, AxiosResponse } from "axios";
 import { createHttpClient, withBackoff } from "./http";
 import { getTambasaConfig, getTambasaCredentials, type TambasaConfig } from "./config";
 import { absoluteUrl, errorMessage, parseBrlPrice, sleepJitter } from "./util";
@@ -25,6 +25,13 @@ const CODE_RE = /C[óo]digo:\s*(\d+)/i;
 const CODE_RE_G = /C[óo]digo:\s*\d+/gi;
 const LOGIN_PATH = "/cliente/entrar";
 const LOG = "[SUPPLIER:tambasa]";
+
+/**
+ * Saltos permitidos na cadeia de redirecionamento do login. Hoje são 3
+ * (login-empresa -> enterprise/<id> -> /); o teto baixo transforma um laço
+ * de redirecionamento em erro claro em vez de espera indefinida.
+ */
+const MAX_LOGIN_REDIRECTS = 6;
 
 /** Quantos níveis subir a partir do nó com "Código:" até achar o card inteiro. */
 const MAX_CARD_CLIMB = 8;
@@ -115,7 +122,7 @@ export class TambasaAdapter implements SupplierAdapter {
     form.set("username", credentials.user);
     form.set("password", credentials.password);
 
-    await withBackoff(
+    const posted = await withBackoff(
       () =>
         this.http.post(LOGIN_PATH, form.toString(), {
           headers: {
@@ -131,6 +138,13 @@ export class TambasaAdapter implements SupplierAdapter {
       throw new SupplierAuthError("tambasa", `POST ${LOGIN_PATH} falhou: ${errorMessage(error)}`);
     });
 
+    // O POST não conclui a sessão sozinho. Desde 09/08/2026 o portal encadeia
+    // /cliente/login-empresa -> /cliente/login-empresa/enterprise/<id> -> /,
+    // e é o último salto que libera a navegação com preço. Parar no 302 deixa
+    // uma sessão pela metade: a home mostra preço (a validação abaixo passa),
+    // mas as páginas de categoria respondem 500.
+    await this.followRedirects(posted);
+
     // 3. Validação pelo efeito observável, não pelo status: o portal responde
     //    200 mesmo para credencial errada.
     const probeHtml = await this.fetchHtml("/");
@@ -143,6 +157,40 @@ export class TambasaAdapter implements SupplierAdapter {
 
     this.authenticated = true;
     console.log(`${LOG} sessão autenticada`);
+  }
+
+  /**
+   * Percorre a cadeia de 3xx um salto por vez, em vez de delegar ao axios.
+   * Manual de propósito: cada salto pode trazer `Set-Cookie` (é o que conclui
+   * a seleção de empresa), e seguir à mão deixa o percurso visível no log
+   * quando o portal mudar de novo.
+   */
+  private async followRedirects(response: AxiosResponse): Promise<void> {
+    let current = response;
+
+    for (let hop = 0; hop <= MAX_LOGIN_REDIRECTS; hop++) {
+      if (current.status < 300 || current.status >= 400) return;
+
+      const location = current.headers?.location as string | undefined;
+      // 3xx sem Location não tem para onde ir; deixa a validação de sessão
+      // abaixo decidir se o login valeu.
+      if (!location) return;
+
+      const path = location.startsWith("http")
+        ? location.slice(this.config.baseUrl.length) || "/"
+        : location;
+
+      console.log(`${LOG} login → ${path}`);
+      current = await this.http.get(path, {
+        maxRedirects: 0,
+        validateStatus: (status) => status < 400,
+      });
+    }
+
+    throw new SupplierAuthError(
+      "tambasa",
+      `login excedeu ${MAX_LOGIN_REDIRECTS} redirecionamentos`,
+    );
   }
 
   private extractHiddenFields(html: string): Record<string, string> {
