@@ -11,6 +11,24 @@ export function startCronJobs() {
   console.log(`[CRON] Current São Paulo time: ${saoPauloTime.toLocaleString()}`);
   console.log('========================================');
   
+  startDailyPriceUpdateJob();
+  startSupplierSyncJob();
+}
+
+/**
+ * Atualização diária de preços pela sourceUrl de cada produto.
+ *
+ * Desligável por ambiente: sem isso, teste e produção raspam as mesmas URLs
+ * no mesmo horário, partindo do mesmo IP — o dobro de requisições para os
+ * sites de origem, sem ganho nenhum. Deixe ligado só onde os dados importam.
+ */
+function startDailyPriceUpdateJob() {
+  if (process.env.DAILY_PRICE_UPDATE_ENABLED === 'false') {
+    console.log('[CRON] Daily price update desabilitado (DAILY_PRICE_UPDATE_ENABLED=false)');
+    console.log('========================================');
+    return;
+  }
+
   // Daily price update at 7:00 AM São Paulo time
   const task = cron.schedule('0 7 * * *', async () => {
     const jobStartTime = new Date();
@@ -38,8 +56,6 @@ export function startCronJobs() {
   console.log(`[CRON] Next execution will be at: ${getNextCronTime()}`);
   console.log(`[CRON] Cron task active: ${task ? 'YES' : 'NO'}`);
   console.log('========================================');
-
-  startSupplierSyncJob();
 }
 
 /**

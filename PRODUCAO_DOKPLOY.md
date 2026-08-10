@@ -228,10 +228,24 @@ reivindica aquele hostname: falta cadastrar o domínio na aba Domains.
 
 # Pontos de atenção permanentes
 
-**Sincronização de fornecedores duplicada.** Com `SUPPLIER_SYNC_ENABLED=true`
-nos dois ambientes, ambos raspam os portais às 07:00 com as **mesmas
-credenciais B2B**. A Tambasa fica atrás de Cloudflare e responde 429 a tráfego
-suspeito. Mantenha ligado **só em produção**.
+**Raspagem duplicada entre ambientes.** São **dois** jobs independentes, ambos
+às 07:00, e cada um tem sua própria chave:
+
+| Variável | Job | Risco se duplicado |
+|---|---|---|
+| `SUPPLIER_SYNC_ENABLED` | entra autenticado nos portais | usa a **mesma credencial B2B** nos dois ambientes; a Tambasa fica atrás de Cloudflare e responde 429 |
+| `DAILY_PRICE_UPDATE_ENABLED` | percorre a `sourceUrl` de cada produto, sem login | dobra as requisições aos sites de origem, partindo do mesmo IP |
+
+Deixe ambos ligados **só em produção**. No teste, defina os dois como `false`
+e faça redeploy — as variáveis só são lidas na inicialização. O boot confirma:
+
+```
+[CRON] Daily price update desabilitado (DAILY_PRICE_UPDATE_ENABLED=false)
+[CRON] Supplier sync desabilitado (SUPPLIER_SYNC_ENABLED=false)
+```
+
+Só o valor exato `false` desliga; ausente significa ligado, para um ambiente
+novo não nascer mudo por esquecimento.
 
 **Senha do banco de produção.** Deve ser rotacionada — ela ficou registrada nos
 logs do Dokploy durante o incidente do hostname corrompido, e a porta 15432 é
